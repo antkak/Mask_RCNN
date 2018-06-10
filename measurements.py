@@ -14,6 +14,7 @@ import IPython.display
 from os import listdir
 from os.path import isfile, join
 import skimage.io
+from collections import Counter
 
 
 def apply_mask(image, mask, color, alpha=0.5):
@@ -142,6 +143,24 @@ def save_statistics(output_file, file_name, tracked_id, rois, class_names, class
 				tid, class_names[class_id],roi[0],roi[1], roi[2], roi[3], str(score)))
 			tid += 1
 
+def track_len_histogram(gt_dir, file_name=None):
+
+	with open(gt_dir,'r') as gt_file:
+		gt_lines = [x.split(' ') for x in gt_file.readlines()]
+
+	tracks = [x[1] for x in gt_lines]
+
+	tr_counts = Counter(tracks)
+	height = tr_counts.values()
+	x = tr_counts.keys()
+	plt.bar(x,height)
+	if not file_name:
+		plt.show()
+	else:
+		plt.savefig(file_name)
+		plt.close('all')
+	
+
 def visualize_gt(frames_dir, gt_dir, save_dir):
 
 
@@ -169,6 +188,7 @@ def visualize_gt(frames_dir, gt_dir, save_dir):
 		boxes = np.array([list(map(np.floor,list(map(float,[x[7],x[6],x[9],x[8]])))) for x in lines]) # x1,y1,x2,y2 to y1, x1, y2, x2 
 																									  # cast to float from string
 																									  # floor to get int coords
+																									  # convert to np array
 		scores = np.array(list(map(float,[x[-1] for x in lines])))
 		class_ids = np.array([class_names.index(x[2]) for x in lines]) 
 
@@ -178,9 +198,12 @@ def visualize_gt(frames_dir, gt_dir, save_dir):
 						  show_mask=False, show_bbox=True,
 						  file_name=os.path.join(save_dir,str(frame)+'.png'))
 
-if __name__ == "__main__":
+# if __name__ == "__main__":
 
-	frames_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0000'
-	gt_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/kitti_track/training/label_02/0000.txt'
-	save_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/temp'
-	visualize_gt(frames_dir,gt_dir,save_dir)
+# 	# frames_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0001'
+# 	gt_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/kitti_track/training/label_02/'
+# 	# save_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/temp'
+# 	# visualize_gt(frames_dir,gt_dir,save_dir)
+# 	gt_names = [f for f in listdir(gt_dir) if isfile(join(gt_dir, f))]
+# 	for name in gt_names:
+# 		track_len_histogram(join(gt_dir,name), file_name = name[:-3]+'png')
