@@ -367,3 +367,36 @@ class RoiAppearance():
         pools = self.keras_model.predict([rois, meta, f2, f3, f4, f5])
         return pools
 
+
+class trackedObject():
+
+    def __init__(self, ID, mask, bbox, class_name, encodings, color = [1,1,1]):
+        self.id = ID 
+        self.mask = mask
+        self.bbox = bbox
+        self.class_name = class_name
+        self.tracking_state = 'New'
+        self.encoding = encodings
+        self.color = color
+        self._occluded_cnt = 0
+
+    def refress_state(self, matched):
+        if self.tracking_state == 'New':
+            if matched: 
+                self.tracking_state = 'Tracked'
+            else:
+                self.tracking_state = 'Occluded'
+                self._occluded_cnt = 1
+        elif self.tracking_state == 'Tracked':
+            if not matched:
+                self.tracking_state = 'Occluded'
+                self._occluded_cnt = 1
+        elif self.tracking_state == 'Occluded':
+            if matched:
+                self.tracking_state = 'Tracked'
+                self._occluded_cnt = 0
+            else:
+                self._occluded_cnt += 1
+                if self._occluded_cnt > 5: # Frames being occluded
+                    self.tracking_state = 'Lost'
+
