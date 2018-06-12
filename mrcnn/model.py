@@ -368,7 +368,6 @@ class PyramidROIAlign(KE.Layer):
     def call(self, inputs):
         # Crop boxes [batch, num_boxes, (y1, x1, y2, x2)] in normalized coords
         boxes = inputs[0]
-
         # Image meta
         # Holds details about the image. See compose_image_meta()
         image_meta = inputs[1]
@@ -2037,7 +2036,6 @@ class MaskRCNN():
             # normalized coordinates
             detections = DetectionLayer(config, name="mrcnn_detection")(
                 [rpn_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
-
             # Create masks for detections
             detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
             mrcnn_mask = build_fpn_mask_graph(detection_boxes, mrcnn_feature_maps,
@@ -2507,7 +2505,7 @@ class MaskRCNN():
                 "rois": final_rois,
                 "class_ids": final_class_ids,
                 "scores": final_scores,
-                "masks": final_masks,
+                "masks": final_masks
             })
         return results
 

@@ -9,7 +9,7 @@ ROOT_DIR = os.path.abspath("./")
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn import utils
-import mrcnn.model as modellib
+import trcnn.model as tracker
 from mrcnn import visualize
 # Import COCO config
 sys.path.append(os.path.join(ROOT_DIR, "samples/coco/"))  # To find local version
@@ -17,8 +17,8 @@ import coco
 
 # Import measurement for tracking 
 from measurements import save_instances, save_statistics
-
-
+import numpy as np
+import tensorflow as tf
 
 
 
@@ -75,10 +75,9 @@ def demo_mot(input_dir):
 		IMAGES_PER_GPU = 1
 
 	config = InferenceConfig()
-	config.display()
 
 	# Create model object in inference mode.
-	model = modellib.MaskRCNN(mode="inference", model_dir=MODEL_DIR, config=config)
+	model = tracker.TrackRCNN(mode="inference", model_dir=MODEL_DIR, config=config)
 
 	# Load weights trained on MS-COCO
 	model.load_weights(COCO_MODEL_PATH, by_name=True)
@@ -117,21 +116,27 @@ def demo_mot(input_dir):
 	# run detection
 	results = model.detect([image], verbose=1)
 
-	# get more probable results
+	# get results of the first image (batch size is one)
 	r = results[0]
-	save_instances(image, r['rois'], r['masks'], r['class_ids'], 
-								class_names, r['scores'], file_name = 'temp.png')
+	# save_instances(image, r['rois'], r['masks'], r['class_ids'], 
+	# 							class_names, r['scores'], file_name = 'temp.png')
 
-	# obj_list = []
+	# Initialize model for Appearance features for boxes
+	roi_model = tracker.RoiAppearance(config=config)
+
+	# Read detections from model output
+	rois = r['detections'][:,:,0:4]
+	
+	# Run roi encoding for appearance description
+	appearance = roi_model.rois_encode(rois,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+		r['fp_maps'][2],r['fp_maps'][3])
+
+	obj_list = []
 	# # for each object initialize trackedObject
 	# for roi,mask,class_id in zip(r['rois'], r['masks'], r['class_ids']):
 	# 	# find ID, mask, bbox, class_id, t color
 	# 	obj_list += [trackedObject(uuid.uuid4(), mask, roi, class_id, None)]
-	layers = model.get_trainable_layers()
-	for layer in layers:
-		if layer.name.startswith('fpn'):
-			print("layer {0}\n\t output shape {1}".format(layer.name,layer.output.dims))
-	assert(False)
+
 
 		# from detector read appearance encoding (from correct pyramid layer)
 		# find a way to initialize flow encoding
