@@ -10,6 +10,8 @@ ROOT_DIR = os.path.abspath("../")
 sys.path.append(ROOT_DIR)  # To find local version of the library
 import mrcnn.model as modellib
 from mrcnn.model import *
+import colorsys
+import random
 
 # TrackRCNN adds functionality to MaskRCNN for tracking 
 
@@ -370,15 +372,22 @@ class RoiAppearance():
 
 class trackedObject():
 
-    def __init__(self, ID, mask, bbox, class_name, encodings, color = [1,1,1]):
+    def __init__(self, ID, mask, bbox, class_name, encodings, color = None):
         self.id = ID 
         self.mask = mask
         self.bbox = bbox
         self.class_name = class_name
         self.tracking_state = 'New'
         self.encoding = encodings
-        self.color = color
+        self.color = color if color is not None else self.init_color()
         self._occluded_cnt = 0
+
+    def init_color(self):
+        N = 20
+        brightness = 1.0
+        hsv = [(i / N, 1, brightness) for i in range(N)]
+        colors = list(map(lambda c: colorsys.hsv_to_rgb(*c), hsv))
+        return random.choice(colors)
 
     def refress_state(self, matched):
         if self.tracking_state == 'New':

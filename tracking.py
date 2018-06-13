@@ -2,7 +2,14 @@ import skimage.io
 import os, sys
 from os.path import isfile, join
 from os import listdir
+
 import uuid
+
+import numpy as np
+import tensorflow as tf
+
+from scipy.spatial.distance import correlation
+from scipy.optimize import linear_sum_assignment
 
 ROOT_DIR = os.path.abspath("./")
 
@@ -10,58 +17,19 @@ ROOT_DIR = os.path.abspath("./")
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from mrcnn import utils
 import trcnn.model as tracker
+from trcnn.model import trackedObject as tob
 from mrcnn import visualize
+
 # Import COCO config
 sys.path.append(os.path.join(ROOT_DIR, "samples/coco/"))  # To find local version
 import coco
 
 # Import measurement for tracking 
-from measurements import save_instances, save_statistics
-import numpy as np
-import tensorflow as tf
-
-
-
-class trackedObject():
-
-	def __init__(self, ID, mask, bbox, class_name, encodings, color = [1,1,1]):
-		self.id = ID 
-		self.mask = mask
-		self.bbox = bbox
-		self.class_name = class_name
-		self.tracking_state = 'New'
-		self.encoding = encodings
-		self.color = color
-		self._occluded_cnt = 0
-
-	def refress_state(self, matched):
-		if self.tracking_state == 'New':
-			if matched: 
-				self.tracking_state = 'Tracked'
-			else:
-				self.tracking_state = 'Occluded'
-				self._occluded_cnt = 1
-		elif self.tracking_state == 'Tracked':
-			if not matched:
-				self.tracking_state = 'Occluded'
-				self._occluded_cnt = 1
-		elif self.tracking_state == 'Occluded':
-			if matched:
-				self.tracking_state = 'Tracked'
-				self._occluded_cnt = 0
-			else:
-				self._occluded_cnt += 1
-				if self._occluded_cnt > 5: # Frames being occluded
-					self.tracking_state = 'Lost'
-
+from measurements import  save_instances,  save_statistics
 
 def demo_mot(input_dir):
 
-	##########################################################################
-	################### initialize detection model ###########################
-	##########################################################################
-
-	# Directory to save logs and trained model
+	# Directory to # save logs and trained model
 	MODEL_DIR = os.path.join(ROOT_DIR, "logs")
 
 	# Local path to trained weights file
@@ -102,11 +70,6 @@ def demo_mot(input_dir):
 				   'teddy bear', 'hair drier', 'toothbrush']
 
 
-
-	##########################################################################
-	################### 		initialize input		######################
-	########################################################################## 
-
 	IMAGE_DIR = input_dir
 	frames = sorted([f for f in listdir(IMAGE_DIR) if isfile(join(IMAGE_DIR, f))])
 
@@ -114,12 +77,11 @@ def demo_mot(input_dir):
 	image = skimage.io.imread(os.path.join(IMAGE_DIR,frames[0]))
 
 	# run detection
-	results = model.detect([image], verbose=1)
+	results = model.detect([image], verbose=0)
 
 	# get results of the first image (batch size is one)
 	r = results[0]
-	# save_instances(image, r['rois'], r['masks'], r['class_ids'], 
-	# 							class_names, r['scores'], file_name = 'temp.png')
+
 
 	# Initialize model for Appearance features for boxes
 	roi_model = tracker.RoiAppearance(config=config)
@@ -131,62 +93,155 @@ def demo_mot(input_dir):
 	appearance = roi_model.rois_encode(rois,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
 		r['fp_maps'][2],r['fp_maps'][3])
 
+	lost_obj = []
 	obj_list = []
-	# # for each object initialize trackedObject
-	# for roi,mask,class_id in zip(r['rois'], r['masks'], r['class_ids']):
-	# 	# find ID, mask, bbox, class_id, t color
-	# 	obj_list += [trackedObject(uuid.uuid4(), mask, roi, class_id, None)]
+	# for each object initialize trackedObject
+	for i in range(len(r['class_ids'])):
 
+		# for simple demo: svd vector representation of feature map appearance
+		app_i = appearance[0,i,:,:,:]
+		s = np.linalg.svd(np.transpose(app_i, (2, 0, 1)), full_matrices=False, compute_uv=False)
+		app_v = np.transpose(s).flatten('F')
 
-		# from detector read appearance encoding (from correct pyramid layer)
-		# find a way to initialize flow encoding
-		# save trackedObject s in a list or something
+		# print(app_v)
+		obj_list += [tob(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
+			r['class_ids'][i], app_v)]
+
+	# save first frame
+	save_instances(image, r['rois'], r['masks'], r['class_ids'], 
+								class_names, scores = [str(x.id)[:4] for x in obj_list], file_name = str(0)+'.png', colors=[x.color for x in obj_list])
+
+	# print log info
+	print("frame {}".format(0))
+	for obj in obj_list:
+		print("id {}\nstate {}\nbox {}".format(obj.id, obj.tracking_state, obj.bbox))
 
 	# for each following frame
+	jj = 0
+	for frame in frames[1:]:
+		jj += 1
+		print("Frame {}".format(jj))
 		# read frame
-		# Add extra anchors from previous step
-		# GATING?
+		image = skimage.io.imread(os.path.join(IMAGE_DIR,frame))
+
+		# TODO: Add extra anchors from previous step
+		
+		# TODO: Gating
+
 		# Run detection
+		results = model.detect([image], verbose=1)
+		r = results[0]
+		rois = r['detections'][:,:,0:4]
+
+		# Run roi encoding for appearance description
+		appearance = roi_model.rois_encode(rois,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+			r['fp_maps'][2],r['fp_maps'][3])	
+
 		# for each newly found object initialize trackedObject
-			# find ID, mask, bbox, class_name, tracked_id = New, color
+		temp_list = []
+		for i in range(len(r['class_ids'])):
+		
 			# from detector read appearance encoding (from correct pyramid layer)
-			# run flownet and get motion encoding (is there a pyramid structure)
-			# for each old object run simple score and get score matrix
+			app_i = appearance[0,i,:,:,:]
+			s = np.linalg.svd(np.transpose(app_i, (2, 0, 1)), full_matrices=False, compute_uv=False)
+			app_v = np.transpose(s).flatten('F')
+
+			# initialize tracked Objects for this current frame
+			temp_list += [tob(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
+			r['class_ids'][i], app_v)]
+
+			# TODO: motion encoding
+
+		"""
+		For matching, match old objects (rows) to new objects (columns)
+		"""
+		# for each old object run simple score and get score matrix
+		cost_matrix = np.zeros((len(obj_list),len(temp_list)))
+		for i in range(len(obj_list)):
+			for j in range(len(temp_list)):
+				cost_matrix[i,j] = simple_dist(obj_list[i],temp_list[j])
+
+		# pad cost matrix if more old objects than new objects
+		if cost_matrix.shape[0] > cost_matrix.shape[1]:
+			cost_matrix = squarify(cost_matrix, 100)
+
 		# run assingment 
-		# for each newly found object change ID, color
-		# for each tracked object change tracked ID
-		# remove lost from active list
+		row_ind, col_ind = linear_sum_assignment(cost_matrix)
+		# log assignment
+		print(row_ind)
+		print(col_ind)
+
+		num_old = len(obj_list)
+		num_new = len(temp_list)
+		temp_matched = [False]*num_new
+		print(temp_matched)
+		# propagate previous objects in new frame
+		for i in range(num_old):
+			# if there is a match (old>temp)
+			# TODO: treshold matching score
+			if col_ind[i] < num_new:
+				# refress data
+				obj_list[i].bbox = temp_list[col_ind[i]].bbox
+				obj_list[i].mask = temp_list[col_ind[i]].mask
+				obj_list[i].encoding = temp_list[col_ind[i]].encoding
+				obj_list[i].class_name = temp_list[col_ind[i]].class_name
+				obj_list[i].refress_state(True)
+				temp_matched[col_ind[i]] = True
+			else:
+				obj_list[i].refress_state(False)
+
+		# initialize new objects
+		for i in range(num_new):
+			if not temp_matched[i]:
+				obj_list += [temp_list[i]]
+
+		# keep objects appeared in current frame
+		obj_list_fr = [x for x in obj_list if x.tracking_state=='Tracked' or x.tracking_state=='New']
+		num_obj = len(obj_list_fr)
+
+		# Prepare object data for saving image
+		boxes = np.empty([num_obj,4])
+		masks = np.empty([image.shape[0], image.shape[1], num_obj])
+		for i in range(num_obj):
+			boxes[i,:] = obj_list_fr[i].bbox
+			masks[:,:,i] = obj_list_fr[i].mask
+		# save current frame with found objects
+		save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
+									class_names, scores = [str(x.id)[:4] for x in obj_list_fr], file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+		# log object info for current frame
+		print("frame {}".format(jj))
+		for obj in obj_list:
+			print("id {}\nstate {}\nbox {}".format(obj.id, obj.tracking_state, obj.bbox))
+
+		# remove lost objects
+		lost_obj += [x for x in obj_list if x.tracking_state=='Lost']
+		obj_list = [x for x in obj_list if x.tracking_state!='Lost']
 
 	return obj_list
 
+def squarify(M,val):
+    (a,b)=M.shape
+    if a>b:
+        padding=((0,0),(0,a-b))
+    else:
+        padding=((0,b-a),(0,0))
+    return np.pad(M,padding,mode='constant',constant_values=val)
 
 
-
-def simple_score(object1, object2):
+def simple_dist(object1, object2):
 	# score object1.encoding, object2.encoding
 	# multiple encodings, multiple regressing layers
-	return 0
 
-def assignment(score_matrix):
+	return correlation(object1.encoding,object2.encoding)
+
+def assignment(cost_matrix):
 	# https://docs.scipy.org/doc/scipy-0.19.1/reference/generated/scipy.optimize.linear_sum_assignment.html
-	# and thresholding on assignment score for None class??? better solution???
 	return 0
 
 
 if __name__ == '__main__':
-	# # tests for refress_state method
-	# import random
-	# obj = trackedObject(0,0,0,0,0)
-	# obj.tracking_state = 'New'
-	# print(obj.tracking_state)
-	# for i in range(100):
-	# 	m = random.choice([True, False])
-	# 	obj.refress_state(m)
-	# 	print(str(obj.tracking_state)+'\t\t'+str(m))
-	# tests for simple mot
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/testing/image_02/0000'
-	print([x.__dict__ for x in demo_mot(input_dir)])
-
+	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/testing/image_02/0025'
+	print([x.encoding for x in demo_mot(input_dir)])
 
 
 
