@@ -40,7 +40,7 @@ def random_colors(N, bright=True):
 	return colors
 
 def save_instances(image, boxes, masks, class_ids, class_names,
-					  scores=None, title="",
+					  ids=None, title="",
 					  figsize=(16, 16), ax=None,
 					  show_mask=True, show_bbox=True,
 					  colors=None, captions=None, file_name=None):
@@ -49,7 +49,7 @@ def save_instances(image, boxes, masks, class_ids, class_names,
 	masks: [height, width, num_instances]
 	class_ids: [num_instances]
 	class_names: list of class names of the dataset
-	scores: (optional) confidence scores for each box
+	ids: (optional) tracking unique identity for each box
 	title: (optional) Figure title
 	show_mask, show_bbox: To show masks and bounding boxes or not
 	figsize: (optional) the size of the image
@@ -98,10 +98,10 @@ def save_instances(image, boxes, masks, class_ids, class_names,
 		# Label
 		if not captions:
 			class_id = class_ids[i]
-			score = scores[i] if scores is not None else None
+			identity = ids[i] if ids is not None else None
 			label = class_names[class_id]
 			# x = random.randint(x1, (x1 + x2) // 2)
-			caption = "{} {}".format(label, score) if score else label
+			caption = "{} {}".format(label, identity) if identity else label
 		else:
 			caption = captions[i]
 		ax.text(x1, y1 + 8, caption,

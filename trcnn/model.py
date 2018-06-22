@@ -373,6 +373,7 @@ class RoiAppearance():
 class trackedObject():
 
     def __init__(self, ID, mask, bbox, class_name, encodings, color = None):
+
         self.id = ID 
         self.mask = mask
         self.bbox = bbox
@@ -381,6 +382,9 @@ class trackedObject():
         self.encoding = encodings
         self.color = color if color is not None else self.init_color()
         self._occluded_cnt = 0
+        self.bbox_pred = bbox           # predicted bbox in next frame
+        self.v_pred = [0,0]             # predicted velocity in next frame
+        self.v = [0,0]                  # current velocity
 
     def init_color(self):
         N = 20
@@ -389,7 +393,9 @@ class trackedObject():
         colors = list(map(lambda c: colorsys.hsv_to_rgb(*c), hsv))
         return random.choice(colors)
 
-    def refress_state(self, matched):
+    def refresh_state(self, matched):
+
+        # TODO: include xc, yc, h, w, velocities state
         if self.tracking_state == 'New':
             if matched: 
                 self.tracking_state = 'Tracked'
@@ -408,4 +414,48 @@ class trackedObject():
                 self._occluded_cnt += 1
                 if self._occluded_cnt > 5: # Frames being occluded
                     self.tracking_state = 'Lost'
+
+    def motion_prediction(self):
+
+        self.v_pred = self.vel_predict()
+        self.bbox_pred = self.bbox_predict() 
+        return self.v_pred, self.bbox_pred
+
+    def update_motion(self, bbox_obs):
+
+        assert(self.tracking_state != 'New')
+
+        if self.tracking_state == 'Tracked':
+            assert(bbox_obs is not None)
+            self.v = self.compute_vel(bbox_obs)
+            self.bbox = bbox_obs 
+        elif self.tracking_state == 'Occluded':
+            assert(bbox_obs is None)
+            self.v = self.v_pred
+            self.bbox = self.bbox_pred
+        else:
+            # Lost, Do nothing really
+            None
+
+    def vel_predict(self,mode='const'):
+        # classic constant velocity model
+        if mode == 'const':
+            return self.v
+        # elif mode == 'rnn':
+        #     return self.rnn_model.predict(self.v)
+        else:
+            assert(self,mode=='const')
+
+    def bbox_predict(self):
+        # y x y x
+        # x y 
+        return [self.v_pred[1] + self.bbox[0],
+                self.v_pred[0] + self.bbox[1],
+                self.v_pred[1] + self.bbox[2],
+                self.v_pred[0] + self.bbox[3]]
+
+    def compute_vel(self,bbox_obs, mode = 'upper'):
+        # TODO: implement Nearest corner
+        return [bbox_obs[1] - self.bbox[1],
+                bbox_obs[0] - self.bbox[0]]    
 
