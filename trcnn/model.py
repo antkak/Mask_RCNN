@@ -70,6 +70,7 @@ class TrackRCNN(modellib.MaskRCNN):
         elif mode == "inference":
             # Anchors in normalized coordinates
             input_anchors = KL.Input(shape=[None, 4], name="input_anchors")
+            tracking_anchors = KL.Input(shape=[None, 4], name="tracking_anchors")
 
         # Build the shared convolutional layers.
         # Bottom-up Layers
@@ -213,6 +214,16 @@ class TrackRCNN(modellib.MaskRCNN):
         else:
             # Network Heads
             # Proposal classifier and BBox regressor heads
+
+            # Preprocess track rois and merge them with rpn rois
+            track_rois = TrackRoisLayer(
+                proposal_count=100,
+                nms_threshold=config.RPN_NMS_THRESHOLD,
+                name="TROI",
+                config=config)([tracking_anchors])
+            rpn_rois = KL.Concatenate(axis = 1)([rpn_rois, track_rois])
+
+
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
                 fpn_classifier_graph(rpn_rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
@@ -232,7 +243,7 @@ class TrackRCNN(modellib.MaskRCNN):
                                               config.NUM_CLASSES,
                                               train_bn=config.TRAIN_BN)
 
-            model = KM.Model([input_image, input_image_meta, input_anchors],
+            model = KM.Model([input_image, input_image_meta, input_anchors, tracking_anchors],
                              [detections, mrcnn_class, mrcnn_bbox,
                                  mrcnn_mask, rpn_rois, rpn_class, rpn_bbox,P2,P3,P4,P5],
                              name='mask_rcnn')
@@ -246,7 +257,7 @@ class TrackRCNN(modellib.MaskRCNN):
 
     # Overwrite detect function to output feat maps, image metas, molded images and 
     # normalized coordinates of boxes (detections)
-    def detect(self, images, verbose=0):
+    def detect(self, images, tracking_anchors, verbose=0):
         """Runs the detection pipeline.
 
         images: List of images, potentially of different sizes.
@@ -278,9 +289,13 @@ class TrackRCNN(modellib.MaskRCNN):
 
         # Anchors
         anchors = self.get_anchors(image_shape)
+
+        tracking_anchors = normalize_boxes(tracking_anchors, images[0].shape[:2])
+
         # Duplicate across the batch dimension because Keras requires it
         # TODO: can this be optimized to avoid duplicating the anchors?
         anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
+        tracking_anchors = np.broadcast_to(tracking_anchors, (self.config.BATCH_SIZE,) + tracking_anchors.shape)
 
         if verbose:
             log("molded_images", molded_images)
@@ -288,7 +303,7 @@ class TrackRCNN(modellib.MaskRCNN):
             log("anchors", anchors)
         # Run object detection
         detections, _, _, mrcnn_mask, _, _, _, P2,P3,P4,P5=\
-            self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+            self.keras_model.predict([molded_images, image_metas, anchors, tracking_anchors], verbose=0)
 
         # Process detections
         results = []
@@ -309,6 +324,61 @@ class TrackRCNN(modellib.MaskRCNN):
             })
         return results
 
+def normalize_boxes(boxes, imshape):
+    
+    height, width = imshape
+    if height > width:
+        shift = (height - width)/2
+        boxes = boxes + np.array([0, shift, 0, shift])
+        boxes = np.divide(boxes, height-1)
+    else: 
+        shift = (width - height)/2
+        boxes = boxes + np.array([shift ,0 ,shift ,0])
+        boxes = np.divide(boxes, width-1)
+    return boxes
+
+
+class TrackRoisLayer(KE.Layer):
+    """Preprocess tracking anchors
+
+    Inputs:
+        tracking_anchors: [batch, (y1, x1, y2, x2)] anchors in normalized coordinates
+
+    Returns:
+        corrected and padded tracking anchors in normalized coordinates [batch, rois, (y1, x1, y2, x2)]
+    """
+
+    def __init__(self, proposal_count, nms_threshold, config=None, **kwargs):
+        super(TrackRoisLayer, self).__init__(**kwargs)
+        self.config = config
+        self.proposal_count = proposal_count
+        self.nms_threshold = nms_threshold
+
+    def call(self, inputs):
+
+        anchors = inputs[0]
+
+        # Clip to image boundaries. Since we're in normalized coordinates,
+        # clip to 0..1 range. [batch, N, (y1, x1, y2, x2)]
+        window = np.array([0, 0, 1, 1], dtype=np.float32)
+        boxes = utils.batch_slice(anchors,
+                                  lambda x: clip_boxes_graph(x, window),
+                                  self.config.IMAGES_PER_GPU,
+                                  names=["refined_anchors_clipped"])
+
+        # pad proposals
+        def pad(boxes):
+            # Pad if needed
+            padding = tf.maximum(self.proposal_count - tf.shape(boxes)[0], 0)
+            boxes = tf.pad(boxes, [(0, padding), (0, 0)])
+            return boxes
+
+        proposals = utils.batch_slice(boxes, pad,
+                                      self.config.IMAGES_PER_GPU)
+        return proposals
+
+    def compute_output_shape(self, input_shape):
+        return (None, self.proposal_count, 4)
 
 class RoiAppearance():
 

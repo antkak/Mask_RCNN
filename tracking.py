@@ -28,7 +28,7 @@ from measurements import  save_instances,  save_statistics
 
 print("Import: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
-def demo_mot(input_dir):
+def demo_mot(input_dir, use_extra_boxes=False):
 	'''
 	This function solves the MOT problem for the KITTI video sequence
 	kept in input dir folder
@@ -93,7 +93,7 @@ def demo_mot(input_dir):
 	image = skimage.io.imread(os.path.join(IMAGE_DIR,frames[0]))
 
 	# run detection
-	results = model.detect([image], verbose=0)
+	results = model.detect([image], np.zeros((2,4)), verbose=0)
 
 	# get results of the first image (batch size is one)
 	r = results[0]
@@ -172,7 +172,10 @@ def demo_mot(input_dir):
 		#### DETECTION & NEW OBJECT ENCODING ####
 		#########################################
 		
-		results = model.detect([image], verbose=1)
+		extra_boxes = np.zeros((2,4)) if not use_extra_boxes else \
+			np.array([obj.bbox_pred for obj in obj_list])
+
+		results = model.detect([image], extra_boxes, verbose=1)
 		r = results[0]
 		r = keepClasses(r, classes_det, class_names)
 
@@ -378,8 +381,8 @@ def box_dist(bbox1, bbox2):
 	return min(distances)
 
 if __name__ == '__main__':
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/testing/image_02/0008'
-	print([x.encoding for x in demo_mot(input_dir)])
+	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
+	print([x.encoding for x in demo_mot(input_dir, use_extra_boxes = False)])
 
 
 
