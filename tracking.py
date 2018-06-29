@@ -78,6 +78,7 @@ def demo_mot(input_dir, use_extra_boxes=False):
 				   'keyboard', 'cell phone', 'microwave', 'oven', 'toaster',
 				   'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors',
 				   'teddy bear', 'hair drier', 'toothbrush']
+
 	# Match KITTI class names
 	class_names[class_names.index('person')] = 'Pedestrian'
 	class_names[class_names.index('car')]    = 'Car'
@@ -165,6 +166,10 @@ def demo_mot(input_dir, use_extra_boxes=False):
 			obj.motion_prediction()
 
 		# TODO: Add extra anchors from previous step
+		# it seems that extra anchors are not so important from this step due to
+		# the covering of anchors of Faster RCNN
+		extra_boxes = np.zeros((2,4)) if not use_extra_boxes else \
+			np.array([obj.bbox_pred for obj in obj_list])
 		
 		# TODO: Gating
 
@@ -172,8 +177,7 @@ def demo_mot(input_dir, use_extra_boxes=False):
 		#### DETECTION & NEW OBJECT ENCODING ####
 		#########################################
 		
-		extra_boxes = np.zeros((2,4)) if not use_extra_boxes else \
-			np.array([obj.bbox_pred for obj in obj_list])
+
 
 		results = model.detect([image], extra_boxes, verbose=1)
 		r = results[0]
@@ -192,6 +196,7 @@ def demo_mot(input_dir, use_extra_boxes=False):
 
 		# for each newly found object initialize trackedObject
 		temp_list = []
+		temp_scores = []
 		for i in range(len(r['class_ids'])):
 		
 			# from detector read appearance encoding (from correct pyramid layer)
@@ -202,7 +207,7 @@ def demo_mot(input_dir, use_extra_boxes=False):
 			# initialize tracked Objects for this current frame
 			temp_list += [tob(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
 							r['class_ids'][i], app_v)]
-
+			temp_scores += [r['scores'][i]]
 		print("Tracked Object initialization: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		st = datetime.now()
 
@@ -276,7 +281,7 @@ def demo_mot(input_dir, use_extra_boxes=False):
 
 		# initialize new objects
 		for i in range(num_new):
-			if not temp_matched[i]:
+			if not temp_matched[i] and temp_scores[i] >= 0.7:
 				temp_list[i].id = track_id
 				track_id += 1
 				obj_list += [temp_list[i]]
