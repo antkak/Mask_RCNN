@@ -26,13 +26,19 @@ import coco
 # Import measurement for tracking 
 from measurements import  save_instances,  save_statistics
 
+import pickle
+
 print("Import: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
-def demo_mot(input_dir, use_extra_boxes=False):
+def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	'''
 	This function solves the MOT problem for the KITTI video sequence
 	kept in input dir folder
 	'''
+
+
+	pickles = sorted([f for f in listdir(pickle_dir) if isfile(join(pickle_dir, f))])
+	print(pickles)
 
 	# Relevant classes
 	classes_det = ['Car', 'Pedestrian']
@@ -42,24 +48,6 @@ def demo_mot(input_dir, use_extra_boxes=False):
 
 	# Output tracking file name
 	trackf = input_dir[-4:] + '.txt'
-
-	# Local path to trained weights file
-	COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
-
-
-	class InferenceConfig(coco.CocoConfig):
-		# Set batch size to 1 since we'll be running inference on
-		# one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
-		GPU_COUNT = 1
-		IMAGES_PER_GPU = 1
-
-	config = InferenceConfig()
-
-	# Create model object in inference mode.
-	model = tracker.TrackRCNN(mode="inference", model_dir=MODEL_DIR, config=config)
-
-	# Load weights trained on MS-COCO
-	model.load_weights(COCO_MODEL_PATH, by_name=True)
 
 	# COCO Class names
 	# Index of the class in the list is its ID. 
@@ -83,6 +71,14 @@ def demo_mot(input_dir, use_extra_boxes=False):
 	class_names[class_names.index('person')] = 'Pedestrian'
 	class_names[class_names.index('car')]    = 'Car'
 
+	class InferenceConfig(coco.CocoConfig):
+		# Set batch size to 1 since we'll be running inference on
+		# one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
+		GPU_COUNT = 1
+		IMAGES_PER_GPU = 1
+
+	config = InferenceConfig()
+
 	# Read frame names from folder
 	IMAGE_DIR = input_dir
 	frames = sorted([f for f in listdir(IMAGE_DIR) if isfile(join(IMAGE_DIR, f))])
@@ -93,14 +89,9 @@ def demo_mot(input_dir, use_extra_boxes=False):
 	# read first image
 	image = skimage.io.imread(os.path.join(IMAGE_DIR,frames[0]))
 
-	# run detection
-	results = model.detect([image], np.zeros((2,4)), verbose=0)
-
-	# get results of the first image (batch size is one)
-	r = results[0]
-
-	# keep only relevant classes
-	r = keepClasses(r, classes_det, class_names)
+	## unpickle first dictionary
+	f = open(join(pickle_dir, pickles[0]),'rb')
+	r = pickle.load(f)
 
 	# Initialize model for Appearance features for boxes
 	roi_model = tracker.RoiAppearance(config=config)
@@ -163,12 +154,6 @@ def demo_mot(input_dir, use_extra_boxes=False):
 		# assumption, but can also be modeled with RNNs (TODOs). Here we use the CVA
 		for obj in obj_list:
 			obj.motion_prediction()
-
-		# TODO: Add extra anchors from previous step
-		# it seems that extra anchors are not so important from this step due to
-		# the covering of anchors of Faster RCNN
-		extra_boxes = np.zeros((2,4)) if not use_extra_boxes else \
-			np.array([obj.bbox_pred for obj in obj_list])
 		
 		# TODO: Gating
 
@@ -176,11 +161,8 @@ def demo_mot(input_dir, use_extra_boxes=False):
 		#### DETECTION & NEW OBJECT ENCODING ####
 		#########################################
 		
-
-
-		results = model.detect([image], extra_boxes, verbose=1)
-		r = results[0]
-		r = keepClasses(r, classes_det, class_names)
+		f = open(join(pickle_dir, pickles[jj]),'rb')
+		r = pickle.load(f)
 
 		print("Detections: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		st = datetime.now() 
@@ -201,7 +183,7 @@ def demo_mot(input_dir, use_extra_boxes=False):
 			# from detector read appearance encoding (from correct pyramid layer)
 			app_i = np.transpose(appearance[0,i,:,:,:],(2, 0, 1))
 			app_v = tensor2vec(app_i, mode = 'full')
-			print('shape of appvec {}: '.format(app_v.shape))
+			# print('shape of appvec {}: '.format(app_v.shape))
 
 			# initialize tracked Objects for this current frame
 			temp_list += [tob(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
@@ -250,7 +232,7 @@ def demo_mot(input_dir, use_extra_boxes=False):
 		# log assignment
 		print(row_ind)
 		print(col_ind)
-
+		matching_scores = []
 		for i in row_ind:
 			matching_scores += [peek_matrix[i,col_ind[i]]]
 		print(matching_scores)
@@ -265,12 +247,12 @@ def demo_mot(input_dir, use_extra_boxes=False):
 		#### UPDATE OBJECTS ####
 		########################
 
-		#match_threshold = 0.1
+		# match_threshold = 0.45
 		# propagate previous objects in new frame
 		for i in range(num_old):
 			# if there is a match (old>temp)
 			# TODO: treshold matching score
-			# if col_ind[i] < num_new and peek_matrix[i,col_ind[i]] < match_threshold:
+			#if col_ind[i] < num_new and peek_matrix[i,col_ind[i]] < match_threshold:
 			if col_ind[i] < num_new:
 				# refress data
 				obj_list[i].refresh_state(True)
@@ -297,20 +279,20 @@ def demo_mot(input_dir, use_extra_boxes=False):
 		num_obj = len(obj_list_fr)
 
 		print("Identity propagation: {} (hh:mm:ss.ms)".format(datetime.now()-st))
-		st = datetime.now() 	
-		if jj <15:
-			# Prepare object data for saving image
-			boxes = np.empty([num_obj,4])
-			masks = np.empty([image.shape[0], image.shape[1], num_obj])
-			for i in range(num_obj):
-				# boxes[i,:] = obj_list_fr[i].bbox_pred
-				boxes[i,:] = obj_list_fr[i].bbox
-				masks[:,:,i] = obj_list_fr[i].mask
+		st = datetime.now() 
 
-			# save current frame with found objects
-			save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
-							class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
-							file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+		# Prepare object data for saving image
+		boxes = np.empty([num_obj,4])
+		masks = np.empty([image.shape[0], image.shape[1], num_obj])
+		for i in range(num_obj):
+			# boxes[i,:] = obj_list_fr[i].bbox_pred
+			boxes[i,:] = obj_list_fr[i].bbox
+			masks[:,:,i] = obj_list_fr[i].mask
+
+		# save current frame with found objects
+		save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
+						class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
+						file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
 		print("Saving Image: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		with open(trackf, 'a') as trf:
 			for obj in obj_list:
@@ -400,7 +382,8 @@ def tensor2vec(tensor, mode = 'full'):
 
 if __name__ == '__main__':
 	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
-	print([x.encoding for x in demo_mot(input_dir, use_extra_boxes = False)])
+	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0014'
+	print([x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)])
 
 
 
