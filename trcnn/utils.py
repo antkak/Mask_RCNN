@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.spatial.distance import correlation, cosine, euclidean
 from numba import jit
+import cv2
 
 
 def squarify(M,val):
@@ -189,11 +190,18 @@ def bbs(obj1, obj2):
 
 	return buddy_count/min(len(particles1),len(particles2))
 
-
 def random_sampling(mask, num_points):
+
+	N = np.sum(mask)
+	point_val = np.random.choice(np.array(list(range(1,N))), size = num_points, replace = False)
+
+	return _random_sampling(mask,point_val)
+
+@jit
+def _random_sampling(mask, point_val):
+
 	points_found = 0
 	points = []
-
 	# give id to each of the track
 	ii = 1
 	mask = mask.astype(int)
@@ -203,8 +211,74 @@ def random_sampling(mask, num_points):
 				mask[i,j]= ii
 				ii += 1
 
-	N = ii
-	point_val = np.random.choice(np.array(list(range(1,N))), size = num_points, replace = False)
-	points = [[np.asscalar(x) for x in np.where(mask==val)] for val in point_val]
-
+	points = []
+	for val in point_val:
+		inds = []
+		for x in np.where(mask==val):
+			inds += [np.asscalar(x)]
+		points += [inds]
 	return points
+
+def sample_boxes(r):
+	'''
+	Samples boxes inside detection masks. 
+	Returns:
+	pyr_levels: List containing the computed pyramid level for each detection
+	bboxes2_batch: A 2D numpy array [boxes][coordinates]
+	split_list: List describing how to split bboxes2_batches  
+	'''
+
+	pyr_levels = []
+	bboxes2_batch = np.array([0,0,0,0])
+	split_list = []
+	pyramid_erosion = 2
+	kernel = np.array([[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]] ,np.uint8)
+
+	for i in range(len(r['class_ids'])):
+		
+		# feature pyramid that corresponds to object size
+		pyramid_level = int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((r['rois'][i,2]-r['rois'][i,0])*(r['rois'][i,3]-r['rois'][i,1]))))))
+		# save to list to initialize object later
+		pyr_levels += [pyramid_level]
+
+		if pyramid_level > pyramid_erosion:
+			mask_image = cv2.erode((r['masks'][:,:,i]).astype(np.uint8), kernel, iterations=1).astype(bool)
+		else:
+			mask_image = r['masks'][:,:,i]
+
+		# feature pyramid particle constants that correspond to object size
+		# 1: same pyramid
+		# 2: lower pyramid
+		M1, M2 = pyr_sizes(pyramid_level) 
+		N1, N2 = num_particles(mask_image)
+
+		# visualize particle constants
+		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M1//2, (0,0,255), 1)
+		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M2//2, (0,0,255), 1)
+
+		# sample points inside mask
+		# points1 = random_sampling(mask_image, N1)
+		points2 = random_sampling(mask_image, N2)
+
+		M1 = M1//2
+		M2 = M2//2
+
+		# points to bounding boxes
+		# bboxes1 = np.array([[ point[0]-M1, point[1]-M1, point[0]+M1, point[1]+M1 ] for point in points1]+[[0,0,0,0]])
+		# bboxes1_abs1 = bboxes1.copy() 
+		bboxes2 = np.array([[ point[0]-M2, point[1]-M2, point[0]+M2, point[1]+M2 ] for point in points2]+[[0,0,0,0]])
+		bboxes2_batch = np.vstack((bboxes2_batch,bboxes2))
+		split_list += [N2]
+
+		#visualize bounding boxes
+		# for i in range(bboxes1.shape[0]):
+		# 	cv2.rectangle(image,tuple([bboxes1[i][1], bboxes1[i][0]]),tuple([bboxes1[i][3], bboxes1[i][2]]),(0,255,0),1)
+		# for i in range(bboxes2.shape[0]):
+		# 	cv2.rectangle(image,tuple([bboxes2[i][1], bboxes2[i][0]]),tuple([bboxes2[i][3], bboxes2[i][2]]),(0,255,0),1)
+
+		# normalize bboxes
+		# bboxes1 = np.array([normalize_boxes(bboxes1, image.shape[:2])])
+		# cv2.imshow('im', image)
+		# cv2.waitKey(0)
+
+	return pyr_levels, bboxes2_batch, split_list

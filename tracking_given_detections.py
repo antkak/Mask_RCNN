@@ -7,7 +7,6 @@ from os import listdir
 import uuid
 import numpy as np
 import pickle
-import cv2
 
 from scipy.optimize import linear_sum_assignment
 
@@ -16,7 +15,7 @@ ROOT_DIR = os.path.abspath("./")
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
 from trcnn.utils import squarify, keepClasses, simple_dist, box_dist, tensor2vec, \
-						pyr_sizes, num_particles, bbs, random_sampling
+						bbs, sample_boxes
 import trcnn.model as tracker
 from trcnn.model import trackedObject as tob
 from trcnn.model import normalize_boxes
@@ -101,90 +100,36 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	# Read detections from model output (detections contain rois in normalized coords)
 	# OR normalize bboxes using tracker.normalize_boxes
 	rois = r['detections'][:,:,0:4]
-				
-	feat_sets = []
-	pyr_levels = []
-
-	st = datetime.now()
-	for i in range(len(r['class_ids'])):
 		
-		# feature pyramid that corresponds to object size
-		pyramid_level = int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((r['rois'][i,2]-r['rois'][i,0])*(r['rois'][i,3]-r['rois'][i,1]))))))
-		pyr_levels += [pyramid_level]
+	st = datetime.now()			
+	# Compute particle bounding boxes and pyramid levels
+	pyr_levels, bboxes2_batch, split_list = sample_boxes(r)
 
-		# run a erosion to get samples inside masks
-		kernel = np.array([[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]] ,np.uint8)
-		if pyramid_level > 2:
-			mask_image = cv2.erode((r['masks'][:,:,i]).astype(np.uint8), kernel, iterations=1).astype(bool)
-		else:
-			mask_image = r['masks'][:,:,i]
-		# mask_image = r['masks'][:,:,i]
+	# Keep a copy of absolute coordinates
+	bboxes2_abs_batch = bboxes2_batch.copy()
 
-		# feature pyramid particle constants that correspond to object size
-		M1, M2 = pyr_sizes(pyramid_level) 
-		N1, N2 = num_particles(mask_image)
+	# Normalize coordinates for encoding
+	bboxes2_batch = np.array([normalize_boxes(bboxes2_batch, image.shape[:2])])
 
-		# visualize particle constants
-		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M1//2, (0,0,255), 1)
-		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M2//2, (0,0,255), 1)
+	# Encode particle boxes
+	st_1  = datetime.now()
+	app2 = roi_model.rois_encode(bboxes2_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+				r['fp_maps'][2],r['fp_maps'][3])
+	print('enc_time{}'.format(datetime.now()-st_1))
 
-		# sample points inside mask
-		# points1 = random_sampling(mask_image, N1)
-		points2 = random_sampling(mask_image, N2)
+	# vectorize feature roi pooled maps
+	# app1_list = [app1[0,i,:,:,:].flatten('F') for i in range(app1.shape[1])]
+	# app1 = np.array(app1_list)
+	app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
+	app2 = np.array(app2_list)
 
-		M1 = M1//2
-		M2 = M2//2
-		# points to bounding boxes
-
-		# bboxes1 = np.array([[ point[0]-M1, point[1]-M1, point[0]+M1, point[1]+M1 ] for point in points1]+[[0,0,0,0]])
-		bboxes2 = np.array([[ point[0]-M2, point[1]-M2, point[0]+M2, point[1]+M2 ] for point in points2]+[[0,0,0,0]])
-		bboxes_abs2 = bboxes2.copy() 
-
-		# until here code is working (tested)
-
-
-		# normalize bboxes to pass for encoding
-		# bboxes1 = np.array([normalize_boxes(bboxes1, image.shape[:2])])
-		bboxes2 = np.array([normalize_boxes(bboxes2, image.shape[:2])])
-
-		# encoding
-		# endoding can be done once to save time:
-		# -> concatenate all bboxes from the various layers, then split the encodings with indexing
-		# app1 = roi_model.rois_encode(bboxes1,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
-		# 			r['fp_maps'][2],r['fp_maps'][3])
-		app2 = roi_model.rois_encode(bboxes2,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
-					r['fp_maps'][2],r['fp_maps'][3])
-
-		# vectorize feature roi pooled maps
-		# can I do this without lists?
-		# app1_list = [app1[0,i,:,:,:].flatten('F') for i in range(app1.shape[1])]
-		# app1 = np.array(app1_list)
-
-		app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
-		app2 = np.array(app2_list)
-
-		# remove batch dimension from rois
-		# bboxes1 = np.squeeze(bboxes1, axis = 0)
-		bboxes2 = np.squeeze(bboxes2, axis = 0)
-
-		# append features to feature list
-		feat_sets += [[bboxes_abs2,app2]]#[[[bboxes1, app1], [bboxes2, app2]]]
-
-		# print(bboxes1.shape)
-		# print(app1.shape)
-		# print(bboxes2.shape)
-		# print(app2.shape)
-
-		# visualize bounding boxes
-		# for box in bboxes1:
-		# 	cv2.rectangle(image,tuple([box[1], box[0]]),tuple([box[3], box[2]]),(0,255,0),1)
-		# for box in bboxes2:
-		# 	cv2.rectangle(image,tuple([box[1], box[0]]),tuple([box[3], box[2]]),(0,255,0),1)
-
-
-
-	# cv2.imshow('im', image)
-	# cv2.waitKey(0)
+	# append features to feature list
+	# st_i = 1 because bboxes2_abs_batch first row is dummy (zero initialization)
+	st_i = 1
+	feat_sets = []
+	for i in range(len(split_list)):
+		feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]]]#[[[bboxes1, app1], [bboxes2, app2]]]
+		st_i += split_list[i]
 	print("Appearance encoding of particles: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
 	lost_obj = []
@@ -250,92 +195,36 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# Run roi encoding for appearance description
 		rois = r['detections'][:,:,0:4]
 
-	
+		# Compute particle bounding boxes and pyramid levels
+		pyr_levels, bboxes2_batch, split_list = sample_boxes(r)
+
+		# Keep a copy of absolute coordinates
+		bboxes2_abs_batch = bboxes2_batch.copy()
+
+		# Normalize coordinates for encoding
+		bboxes2_batch = np.array([normalize_boxes(bboxes2_batch, image.shape[:2])])
+
+		# Encode particle boxes
+		st_1  = datetime.now()
+		app2 = roi_model.rois_encode(bboxes2_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+					r['fp_maps'][2],r['fp_maps'][3])
+		print('enc_time{}'.format(datetime.now()-st_1))
+
+		# vectorize feature roi pooled maps
+		# app1_list = [app1[0,i,:,:,:].flatten('F') for i in range(app1.shape[1])]
+		# app1 = np.array(app1_list)
+		app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
+		app2 = np.array(app2_list)
+
+		# append features to feature list
+		# st_i = 1 because bboxes2_abs_batch first row is dummy (zero initialization)
+		st_i = 1
 		feat_sets = []
-		pyr_levels = []
-
-		st = datetime.now()
-		for i in range(len(r['class_ids'])):
-			
-			# feature pyramid that corresponds to object size
-			pyramid_level = int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((r['rois'][i,2]-r['rois'][i,0])*(r['rois'][i,3]-r['rois'][i,1]))))))
-			pyr_levels += [pyramid_level]
-				
-			kernel = np.array([[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]] ,np.uint8)
-
-			if pyramid_level > 2:
-				mask_image = cv2.erode((r['masks'][:,:,i]).astype(np.uint8), kernel, iterations=1).astype(bool)
-			else:
-				mask_image = r['masks'][:,:,i]
-			# feature pyramid particle constants that correspond to object size
-			# 1: same pyramid
-			# 2: lower pyramid
-			M1, M2 = pyr_sizes(pyramid_level) 
-			N1, N2 = num_particles(mask_image)
-
-			# visualize particle constants
-			# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M1//2, (0,0,255), 1)
-			# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M2//2, (0,0,255), 1)
-
-			# sample points inside mask
-			# points1 = random_sampling(mask_image, N1)
-			points2 = random_sampling(mask_image, N2)
-
-			M1 = M1//2
-			M2 = M2//2
-			# points to bounding boxes
-			# bboxes1 = np.array([[ point[0]-M1, point[1]-M1, point[0]+M1, point[1]+M1 ] for point in points1]+[[0,0,0,0]])
-			# bboxes1_abs1 = bboxes1.copy() 
-			bboxes2 = np.array([[ point[0]-M2, point[1]-M2, point[0]+M2, point[1]+M2 ] for point in points2]+[[0,0,0,0]])
-			bboxes_abs2 = bboxes2.copy()
-			# until here code is working (tested)
-
-			#visualize bounding boxes
-			# for i in range(bboxes1.shape[0]):
-			# 	cv2.rectangle(image,tuple([bboxes1[i][1], bboxes1[i][0]]),tuple([bboxes1[i][3], bboxes1[i][2]]),(0,255,0),1)
-			# for i in range(bboxes2.shape[0]):
-			# 	cv2.rectangle(image,tuple([bboxes2[i][1], bboxes2[i][0]]),tuple([bboxes2[i][3], bboxes2[i][2]]),(0,255,0),1)
-
-			# print('Object Characteristics:')
-			# print(2*M2)
-			# print(pyramid_level)
-			# print(np.sum(mask_image))
-			# print(N2)
-			# normalize bboxes
-			# bboxes1 = np.array([normalize_boxes(bboxes1, image.shape[:2])])
-			bboxes2 = np.array([normalize_boxes(bboxes2, image.shape[:2])])
-
-			# encoding
-			# app1 = roi_model.rois_encode(bboxes1,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
-			# 			r['fp_maps'][2],r['fp_maps'][3])
-			app2 = roi_model.rois_encode(bboxes2,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
-						r['fp_maps'][2],r['fp_maps'][3])
-
-			# vectorize feature roi pooled maps
-			# app1_list = [app1[0,i,:,:,:].flatten('F') for i in range(app1.shape[1])]
-			# app1 = np.array(app1_list)
-
-			app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
-			app2 = np.array(app2_list)
-
-			# remove batch dimension from rois
-			# bboxes1 = np.squeeze(bboxes1, axis = 0)
-			bboxes2 = np.squeeze(bboxes2, axis = 0)
-
-			# append features to feature list
-			feat_sets += [[bboxes_abs2, app2]]#[[[bboxes1, app1], [bboxes2, app2]]]
-
-			# print(bboxes1.shape)
-			# print(app1.shape)
-			# print(bboxes2.shape)
-			# print(app2.shape)
+		for i in range(len(split_list)):
+			feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]]]#[[[bboxes1, app1], [bboxes2, app2]]]
+			st_i += split_list[i]
 
 
-
-
-
-		# cv2.imshow('im', image)
-		# cv2.waitKey(0)
 		print("Appearance encoding of particles: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
 		# print("Appearance encoding: {} (hh:mm:ss.ms)".format(datetime.now()-st))
@@ -350,6 +239,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			temp_list += [tob(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
 							r['class_ids'][i], feat_sets[i], pyr_levels[i])]
 			temp_scores += [r['scores'][i]]
+			
 		print("Tracked Object initialization: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		st = datetime.now()
 
@@ -364,10 +254,10 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		for i in range(len(obj_list)):
 			for j in range(len(temp_list)):
 				# peek_matrix[i,j] = simple_dist(obj_list[i],temp_list[j])
-				if np.abs(obj_list[i].pyramid - temp_list[j].pyramid) > 2:
-					peek_matrix[i,j] = 100
-				else:
-					peek_matrix[i,j] = 1-bbs(obj_list[i],temp_list[j])
+				# if np.abs(obj_list[i].pyramid - temp_list[j].pyramid) > 2:
+				# 	peek_matrix[i,j] = 100
+				# else:
+				peek_matrix[i,j] = 1-bbs(obj_list[i],temp_list[j])
 		# pad cost matrix if more old objects than new objects
 		if peek_matrix.shape[0] > peek_matrix.shape[1]:
 			peek_matrix = squarify(peek_matrix, 100)
@@ -415,12 +305,12 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		#### UPDATE OBJECTS ####
 		########################
 
-		match_threshold = 100
+		# match_threshold = 100
 		# propagate previous objects in new frame
 		for i in range(num_old):
 			# if there is a match (old>temp)
 			# TODO: treshold matching score
-			if col_ind[i] < num_new and peek_matrix[i,col_ind[i]] < match_threshold:
+			if col_ind[i] < num_new: #and peek_matrix[i,col_ind[i]] < match_threshold:
 			# if col_ind[i] < num_new:
 				# refress data
 				obj_list[i].refresh_state(True)
@@ -486,6 +376,9 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		obj_list = [x for x in obj_list if x.tracking_state!='Lost']
 
 	return obj_list
+
+
+
 
 if __name__ == '__main__':
 	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
