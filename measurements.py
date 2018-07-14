@@ -128,6 +128,7 @@ def save_instances(image, boxes, masks, class_ids, class_names,
 	ax.imshow(masked_image.astype(np.uint8))
 	plt.savefig(file_name)
 	plt.close('all')
+	return masked_image.astype(np.uint8)
 
 def save_statistics(output_file, file_name, tracked_id, rois, class_names, class_ids, scores):
 

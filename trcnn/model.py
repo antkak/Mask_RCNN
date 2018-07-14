@@ -415,7 +415,7 @@ class RoiAppearance():
             name='input_P5')
 
         # Graph definition 
-        pool_size = config.POOL_SIZE
+        pool_size = 3 #config.POOL_SIZE
         pooled = PyramidROIAlign([pool_size, pool_size],
                 name="roi_align_classifier")(
                 [input_rois, input_image_meta, input_feat_2,
@@ -442,7 +442,7 @@ class RoiAppearance():
 
 class trackedObject():
 
-    def __init__(self, ID, mask, bbox, class_name, encodings, color = None):
+    def __init__(self, ID, mask, bbox, class_name, encodings, pyramid, color = None):
 
         self.id = ID 
         self.mask = mask
@@ -455,6 +455,7 @@ class trackedObject():
         self.bbox_pred = bbox           # predicted bbox in next frame
         self.v_pred = [0,0]             # predicted velocity in next frame
         self.v = [0,0]                  # current velocity
+        self.pyramid = pyramid
 
     def init_color(self):
         N = 20

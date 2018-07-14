@@ -6,17 +6,20 @@ from os.path import isfile, join
 from os import listdir
 import uuid
 import numpy as np
-import tensorflow as tf
-from scipy.spatial.distance import correlation, cosine
+import pickle
+import cv2
+
 from scipy.optimize import linear_sum_assignment
 
 ROOT_DIR = os.path.abspath("./")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from mrcnn import utils
+from trcnn.utils import squarify, keepClasses, simple_dist, box_dist, tensor2vec, \
+						pyr_sizes, num_particles, bbs, random_sampling
 import trcnn.model as tracker
 from trcnn.model import trackedObject as tob
+from trcnn.model import normalize_boxes
 from mrcnn import visualize
 
 # Import COCO config
@@ -26,8 +29,6 @@ import coco
 # Import measurement for tracking 
 from measurements import  save_instances,  save_statistics
 
-import pickle
-
 print("Import: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
 def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
@@ -36,9 +37,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	kept in input dir folder
 	'''
 
-
 	pickles = sorted([f for f in listdir(pickle_dir) if isfile(join(pickle_dir, f))])
-	print(pickles)
 
 	# Relevant classes
 	classes_det = ['Car', 'Pedestrian']
@@ -83,25 +82,110 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	IMAGE_DIR = input_dir
 	frames = sorted([f for f in listdir(IMAGE_DIR) if isfile(join(IMAGE_DIR, f))])
 	
+	# Initialize model for Appearance features for boxes
+	roi_model = tracker.RoiAppearance(config=config)
+
 	# print log info
 	print("frame {}".format(0))
 	
 	# read first image
 	image = skimage.io.imread(os.path.join(IMAGE_DIR,frames[0]))
 
-	## unpickle first dictionary
+	## unpickle first dictionary 
+	## == run the detector (+4 seconds GPU)
 	f = open(join(pickle_dir, pickles[0]),'rb')
 	r = pickle.load(f)
 
-	# Initialize model for Appearance features for boxes
-	roi_model = tracker.RoiAppearance(config=config)
+
 
 	# Read detections from model output (detections contain rois in normalized coords)
+	# OR normalize bboxes using tracker.normalize_boxes
 	rois = r['detections'][:,:,0:4]
-	
-	# Run roi encoding for appearance description
-	appearance = roi_model.rois_encode(rois,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+				
+	feat_sets = []
+	pyr_levels = []
+
+	st = datetime.now()
+	for i in range(len(r['class_ids'])):
+		
+		# feature pyramid that corresponds to object size
+		pyramid_level = int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((r['rois'][i,2]-r['rois'][i,0])*(r['rois'][i,3]-r['rois'][i,1]))))))
+		pyr_levels += [pyramid_level]
+
+		# run a erosion to get samples inside masks
+		kernel = np.array([[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]] ,np.uint8)
+		if pyramid_level > 2:
+			mask_image = cv2.erode((r['masks'][:,:,i]).astype(np.uint8), kernel, iterations=1).astype(bool)
+		else:
+			mask_image = r['masks'][:,:,i]
+		# mask_image = r['masks'][:,:,i]
+
+		# feature pyramid particle constants that correspond to object size
+		M1, M2 = pyr_sizes(pyramid_level) 
+		N1, N2 = num_particles(mask_image)
+
+		# visualize particle constants
+		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M1//2, (0,0,255), 1)
+		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M2//2, (0,0,255), 1)
+
+		# sample points inside mask
+		# points1 = random_sampling(mask_image, N1)
+		points2 = random_sampling(mask_image, N2)
+
+		M1 = M1//2
+		M2 = M2//2
+		# points to bounding boxes
+
+		# bboxes1 = np.array([[ point[0]-M1, point[1]-M1, point[0]+M1, point[1]+M1 ] for point in points1]+[[0,0,0,0]])
+		bboxes2 = np.array([[ point[0]-M2, point[1]-M2, point[0]+M2, point[1]+M2 ] for point in points2]+[[0,0,0,0]])
+		bboxes_abs2 = bboxes2.copy() 
+
+		# until here code is working (tested)
+
+
+		# normalize bboxes to pass for encoding
+		# bboxes1 = np.array([normalize_boxes(bboxes1, image.shape[:2])])
+		bboxes2 = np.array([normalize_boxes(bboxes2, image.shape[:2])])
+
+		# encoding
+		# endoding can be done once to save time:
+		# -> concatenate all bboxes from the various layers, then split the encodings with indexing
+		# app1 = roi_model.rois_encode(bboxes1,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+		# 			r['fp_maps'][2],r['fp_maps'][3])
+		app2 = roi_model.rois_encode(bboxes2,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
 					r['fp_maps'][2],r['fp_maps'][3])
+
+		# vectorize feature roi pooled maps
+		# can I do this without lists?
+		# app1_list = [app1[0,i,:,:,:].flatten('F') for i in range(app1.shape[1])]
+		# app1 = np.array(app1_list)
+
+		app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
+		app2 = np.array(app2_list)
+
+		# remove batch dimension from rois
+		# bboxes1 = np.squeeze(bboxes1, axis = 0)
+		bboxes2 = np.squeeze(bboxes2, axis = 0)
+
+		# append features to feature list
+		feat_sets += [[bboxes_abs2,app2]]#[[[bboxes1, app1], [bboxes2, app2]]]
+
+		# print(bboxes1.shape)
+		# print(app1.shape)
+		# print(bboxes2.shape)
+		# print(app2.shape)
+
+		# visualize bounding boxes
+		# for box in bboxes1:
+		# 	cv2.rectangle(image,tuple([box[1], box[0]]),tuple([box[3], box[2]]),(0,255,0),1)
+		# for box in bboxes2:
+		# 	cv2.rectangle(image,tuple([box[1], box[0]]),tuple([box[3], box[2]]),(0,255,0),1)
+
+
+
+	# cv2.imshow('im', image)
+	# cv2.waitKey(0)
+	print("Appearance encoding of particles: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
 	lost_obj = []
 	obj_list = []
@@ -109,12 +193,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	# for each object initialize trackedObject
 	for i in range(len(r['class_ids'])):
 
-		# for simple demo: svd vector representation of feature map appearance
-		app_i = np.transpose(appearance[0,i,:,:,:],(2, 0, 1))
-		app_v = tensor2vec(app_i, mode = 'full')
-
 		obj_list += [tob(track_id, r['masks'][:,:,i], r['rois'][i,:],
-						r['class_ids'][i], app_v)]
+						r['class_ids'][i], feat_sets[i], pyr_levels[i])]
 		track_id += 1
 
 	# save first frame
@@ -152,8 +232,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# For each object a (2D image) velocity and (2D image)location is computed
 		# Models for motion prediction include Kalman Filtering, Constant velocity
 		# assumption, but can also be modeled with RNNs (TODOs). Here we use the CVA
-		for obj in obj_list:
-			obj.motion_prediction()
+		# for obj in obj_list:
+		# 	obj.motion_prediction()
 		
 		# TODO: Gating
 
@@ -169,25 +249,106 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 		# Run roi encoding for appearance description
 		rois = r['detections'][:,:,0:4]
-		appearance = roi_model.rois_encode(rois,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
-											r['fp_maps'][2],r['fp_maps'][3])
 
-		print("Appearance encoding: {} (hh:mm:ss.ms)".format(datetime.now()-st))
+	
+		feat_sets = []
+		pyr_levels = []
+
+		st = datetime.now()
+		for i in range(len(r['class_ids'])):
+			
+			# feature pyramid that corresponds to object size
+			pyramid_level = int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((r['rois'][i,2]-r['rois'][i,0])*(r['rois'][i,3]-r['rois'][i,1]))))))
+			pyr_levels += [pyramid_level]
+				
+			kernel = np.array([[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]] ,np.uint8)
+
+			if pyramid_level > 2:
+				mask_image = cv2.erode((r['masks'][:,:,i]).astype(np.uint8), kernel, iterations=1).astype(bool)
+			else:
+				mask_image = r['masks'][:,:,i]
+			# feature pyramid particle constants that correspond to object size
+			# 1: same pyramid
+			# 2: lower pyramid
+			M1, M2 = pyr_sizes(pyramid_level) 
+			N1, N2 = num_particles(mask_image)
+
+			# visualize particle constants
+			# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M1//2, (0,0,255), 1)
+			# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M2//2, (0,0,255), 1)
+
+			# sample points inside mask
+			# points1 = random_sampling(mask_image, N1)
+			points2 = random_sampling(mask_image, N2)
+
+			M1 = M1//2
+			M2 = M2//2
+			# points to bounding boxes
+			# bboxes1 = np.array([[ point[0]-M1, point[1]-M1, point[0]+M1, point[1]+M1 ] for point in points1]+[[0,0,0,0]])
+			# bboxes1_abs1 = bboxes1.copy() 
+			bboxes2 = np.array([[ point[0]-M2, point[1]-M2, point[0]+M2, point[1]+M2 ] for point in points2]+[[0,0,0,0]])
+			bboxes_abs2 = bboxes2.copy()
+			# until here code is working (tested)
+
+			#visualize bounding boxes
+			# for i in range(bboxes1.shape[0]):
+			# 	cv2.rectangle(image,tuple([bboxes1[i][1], bboxes1[i][0]]),tuple([bboxes1[i][3], bboxes1[i][2]]),(0,255,0),1)
+			# for i in range(bboxes2.shape[0]):
+			# 	cv2.rectangle(image,tuple([bboxes2[i][1], bboxes2[i][0]]),tuple([bboxes2[i][3], bboxes2[i][2]]),(0,255,0),1)
+
+			# print('Object Characteristics:')
+			# print(2*M2)
+			# print(pyramid_level)
+			# print(np.sum(mask_image))
+			# print(N2)
+			# normalize bboxes
+			# bboxes1 = np.array([normalize_boxes(bboxes1, image.shape[:2])])
+			bboxes2 = np.array([normalize_boxes(bboxes2, image.shape[:2])])
+
+			# encoding
+			# app1 = roi_model.rois_encode(bboxes1,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+			# 			r['fp_maps'][2],r['fp_maps'][3])
+			app2 = roi_model.rois_encode(bboxes2,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+						r['fp_maps'][2],r['fp_maps'][3])
+
+			# vectorize feature roi pooled maps
+			# app1_list = [app1[0,i,:,:,:].flatten('F') for i in range(app1.shape[1])]
+			# app1 = np.array(app1_list)
+
+			app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
+			app2 = np.array(app2_list)
+
+			# remove batch dimension from rois
+			# bboxes1 = np.squeeze(bboxes1, axis = 0)
+			bboxes2 = np.squeeze(bboxes2, axis = 0)
+
+			# append features to feature list
+			feat_sets += [[bboxes_abs2, app2]]#[[[bboxes1, app1], [bboxes2, app2]]]
+
+			# print(bboxes1.shape)
+			# print(app1.shape)
+			# print(bboxes2.shape)
+			# print(app2.shape)
+
+
+
+
+
+		# cv2.imshow('im', image)
+		# cv2.waitKey(0)
+		print("Appearance encoding of particles: {} (hh:mm:ss.ms)".format(datetime.now()-st))
+
+		# print("Appearance encoding: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		st = datetime.now() 	
 
 		# for each newly found object initialize trackedObject
 		temp_list = []
 		temp_scores = []
 		for i in range(len(r['class_ids'])):
-		
-			# from detector read appearance encoding (from correct pyramid layer)
-			app_i = np.transpose(appearance[0,i,:,:,:],(2, 0, 1))
-			app_v = tensor2vec(app_i, mode = 'full')
-			# print('shape of appvec {}: '.format(app_v.shape))
 
 			# initialize tracked Objects for this current frame
 			temp_list += [tob(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
-							r['class_ids'][i], app_v)]
+							r['class_ids'][i], feat_sets[i], pyr_levels[i])]
 			temp_scores += [r['scores'][i]]
 		print("Tracked Object initialization: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		st = datetime.now()
@@ -202,12 +363,18 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		peek_matrix = np.zeros((len(obj_list),len(temp_list)))
 		for i in range(len(obj_list)):
 			for j in range(len(temp_list)):
-				peek_matrix[i,j] = simple_dist(obj_list[i],temp_list[j])
-
+				# peek_matrix[i,j] = simple_dist(obj_list[i],temp_list[j])
+				if np.abs(obj_list[i].pyramid - temp_list[j].pyramid) > 2:
+					peek_matrix[i,j] = 100
+				else:
+					peek_matrix[i,j] = 1-bbs(obj_list[i],temp_list[j])
 		# pad cost matrix if more old objects than new objects
 		if peek_matrix.shape[0] > peek_matrix.shape[1]:
 			peek_matrix = squarify(peek_matrix, 100)
 
+		print(peek_matrix)
+
+		#assert(False)
 		# # MOTION CONGRUENCE #
 		# # Compare new objects' bounding boxes location to
 		# # old objects' predicted bounding boxes location
@@ -232,6 +399,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# log assignment
 		print(row_ind)
 		print(col_ind)
+
 		matching_scores = []
 		for i in row_ind:
 			matching_scores += [peek_matrix[i,col_ind[i]]]
@@ -247,13 +415,13 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		#### UPDATE OBJECTS ####
 		########################
 
-		# match_threshold = 0.45
+		match_threshold = 100
 		# propagate previous objects in new frame
 		for i in range(num_old):
 			# if there is a match (old>temp)
 			# TODO: treshold matching score
-			#if col_ind[i] < num_new and peek_matrix[i,col_ind[i]] < match_threshold:
-			if col_ind[i] < num_new:
+			if col_ind[i] < num_new and peek_matrix[i,col_ind[i]] < match_threshold:
+			# if col_ind[i] < num_new:
 				# refress data
 				obj_list[i].refresh_state(True)
 				obj_list[i].update_motion(temp_list[col_ind[i]].bbox)
@@ -268,11 +436,17 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 				obj_list[i].update_motion(None)
 
 		# initialize new objects
+		det_thresh = 0.7
 		for i in range(num_new):
-			if not temp_matched[i] and temp_scores[i] >= 0.7:
+			# for new object initialization the detection score should be >= det_thresh
+			if not temp_matched[i] and temp_scores[i] >= det_thresh:
 				temp_list[i].id = track_id
 				track_id += 1
 				obj_list += [temp_list[i]]
+
+		########################################
+		### SAVING RESULTS FOR CURRENT FRAME ###
+		########################################
 
 		# keep objects appeared in current frame
 		obj_list_fr = [x for x in obj_list if x.tracking_state=='Tracked' or x.tracking_state=='New']
@@ -290,8 +464,12 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			masks[:,:,i] = obj_list_fr[i].mask
 
 		# save current frame with found objects
+		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
+		# 				class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
+		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+		# Use this saving code snippet to show pyramid level for debugging
 		save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
-						class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
+						class_names, ids = ['P_'+str(int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))))))) for x in obj_list_fr], 
 						file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
 		print("Saving Image: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		with open(trackf, 'a') as trf:
@@ -302,9 +480,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 								float(obj.bbox[1]), float(obj.bbox[0]), float(obj.bbox[3]), float(obj.bbox[2]), 1))
 
 		st = datetime.now() 	
-		# log object info for current frame
-		# for obj in obj_list:
-		# 	print("id {}\nstate {}\nbox {}".format(obj.id, obj.tracking_state, obj.bbox))
 
 		# remove lost objects
 		lost_obj += [x for x in obj_list if x.tracking_state=='Lost']
@@ -312,78 +487,13 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 	return obj_list
 
-def keepClasses(r, classes, class_names):
-	'''Keep only relevant classes in detection step
-	Detector can be trained to a superset of relevant classes
-	such as car, pedestrian etc'''
-
-	# Extract relevant class_indices
-	class_indices = [class_names.index(c) for c in classes]
-
-	# Get all indices of relevant classes
-	ri = [ i for i in range(len(r['class_ids'])) if r['class_ids'][i] in class_indices]
-
-	print('metas')
-	print(r['detections'].shape)
-
-	# Sample results (r) that match relevant indices
-	return {
-        "rois": r['rois'][ri,:],
-        "class_ids": r['class_ids'][ri],
-        "scores": r['scores'][ri],
-        "masks": r['masks'][:,:,ri],
-        "fp_maps": r['fp_maps'],
-        "metas": r['metas'],
-        "images": r['images'],
-        "detections": r['detections'][:,ri,:]
-	}
-
-
-def squarify(M,val):
-    (a,b)=M.shape
-    if a>b:
-        padding=((0,0),(0,a-b))
-    else:
-        padding=((0,b-a),(0,0))
-    return np.pad(M,padding,mode='constant',constant_values=val)
-
-
-def simple_dist(object1, object2):
-	# score object1.encoding, object2.encoding
-	# multiple encodings, multiple regressing layers
-
-	return cosine(object1.encoding,object2.encoding)
-
-def assignment(peek_matrix):
-	# https://docs.scipy.org/doc/scipy-0.19.1/reference/generated/scipy.optimize.linear_sum_assignment.html
-	return 0
-
-def box_dist(bbox1, bbox2):
-	# use some metric for box distance
-	# center distance, min corner point distance, IoU, IoM etc
-	# here I use min corner point distance (due to occlusions)
-	c1 = [[bbox1[0], bbox1[1]],
-		  [bbox1[0], bbox1[3]],
-		  [bbox1[2], bbox1[1]],
-		  [bbox1[2], bbox1[3]]]
-	c2 = [[bbox2[0], bbox2[1]],
-		  [bbox2[0], bbox2[3]],
-		  [bbox2[2], bbox2[1]],
-		  [bbox2[2], bbox2[3]]]
-	distances = [(a[0]-b[0])**2+(a[1]-b[1])**2 for a,b in zip(c1,c2)]
-	return min(distances)
-
-def tensor2vec(tensor, mode = 'full'):
-	if mode == 'svd':
-		s = np.linalg.svd(tensor, full_matrices=False, compute_uv=False)
-		return np.transpose(s).flatten('F')
-	elif mode == 'full':
-		return tensor.flatten('F')
-
 if __name__ == '__main__':
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
-	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0014'
+	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
+	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017'
 	print([x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)])
+	# mask = np.array([[True, True, True],
+	# 				 [False, False, True]])
+	# print(random_sampling(mask, None))
 
 
 
