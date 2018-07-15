@@ -415,7 +415,7 @@ class RoiAppearance():
             name='input_P5')
 
         # Graph definition 
-        pool_size = 3 #config.POOL_SIZE
+        pool_size = config.POOL_SIZE
         pooled = PyramidROIAlign([pool_size, pool_size],
                 name="roi_align_classifier")(
                 [input_rois, input_image_meta, input_feat_2,

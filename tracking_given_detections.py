@@ -72,6 +72,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	class InferenceConfig(coco.CocoConfig):
 		# Set batch size to 1 since we'll be running inference on
 		# one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
+		POOL_SIZE = 5
 		GPU_COUNT = 1
 		IMAGES_PER_GPU = 1
 
@@ -95,15 +96,13 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	f = open(join(pickle_dir, pickles[0]),'rb')
 	r = pickle.load(f)
 
-
-
 	# Read detections from model output (detections contain rois in normalized coords)
 	# OR normalize bboxes using tracker.normalize_boxes
 	rois = r['detections'][:,:,0:4]
 		
 	st = datetime.now()			
 	# Compute particle bounding boxes and pyramid levels
-	pyr_levels, bboxes2_batch, split_list = sample_boxes(r)
+	pyr_levels, bboxes2_batch, split_list, image = sample_boxes(r, image=image)
 
 	# Keep a copy of absolute coordinates
 	bboxes2_abs_batch = bboxes2_batch.copy()
@@ -157,8 +156,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 							0, obj.id, class_names[obj.class_name], 
 							float(obj.bbox[1]), float(obj.bbox[0]), float(obj.bbox[3]), float(obj.bbox[2]), 1))
 
-
-
 	# for each following frame, run the (classic) MOT algorithm
 	jj = 0
 	for frame in frames[1:]:
@@ -196,7 +193,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		rois = r['detections'][:,:,0:4]
 
 		# Compute particle bounding boxes and pyramid levels
-		pyr_levels, bboxes2_batch, split_list = sample_boxes(r)
+		pyr_levels, bboxes2_batch, split_list, image = sample_boxes(r, image=image)
 
 		# Keep a copy of absolute coordinates
 		bboxes2_abs_batch = bboxes2_batch.copy()
@@ -239,7 +236,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			temp_list += [tob(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
 							r['class_ids'][i], feat_sets[i], pyr_levels[i])]
 			temp_scores += [r['scores'][i]]
-			
+
 		print("Tracked Object initialization: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		st = datetime.now()
 
@@ -354,13 +351,13 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			masks[:,:,i] = obj_list_fr[i].mask
 
 		# save current frame with found objects
-		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
-		# 				class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
-		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
-		# Use this saving code snippet to show pyramid level for debugging
 		save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
-						class_names, ids = ['P_'+str(int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))))))) for x in obj_list_fr], 
+						class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
 						file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+		# Use this saving code snippet to show pyramid level for debugging
+		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
+		# 				class_names, ids = ['P_'+str(int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))))))) for x in obj_list_fr], 
+		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
 		print("Saving Image: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		with open(trackf, 'a') as trf:
 			for obj in obj_list:
@@ -381,9 +378,11 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 
 if __name__ == '__main__':
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
-	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017'
+	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
+	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0014'
+	st_mot = datetime.now()
 	print([x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)])
+	print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
 	# mask = np.array([[True, True, True],
 	# 				 [False, False, True]])
 	# print(random_sampling(mask, None))

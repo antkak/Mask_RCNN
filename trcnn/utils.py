@@ -84,7 +84,7 @@ def pyr_sizes(level):
 	'''
 	
 	if level == 0:
-		return 14, 7
+		return 14, 10
 	elif level == 1:
 		return 28, 14
 	elif level == 2:
@@ -102,6 +102,7 @@ def num_particles(mask):
 	Here I tried the square root + constant
 	'''
 	N = int(np.sqrt(np.sum(mask)))+10
+	# N = np.sum(mask)//4
 	# print('mask points:{} particles: {}'.format( np.sum(mask), N ) )
 	return N//4, N
 
@@ -219,7 +220,7 @@ def _random_sampling(mask, point_val):
 		points += [inds]
 	return points
 
-def sample_boxes(r):
+def sample_boxes(r, image=None):
 	'''
 	Samples boxes inside detection masks. 
 	Returns:
@@ -231,8 +232,8 @@ def sample_boxes(r):
 	pyr_levels = []
 	bboxes2_batch = np.array([0,0,0,0])
 	split_list = []
-	pyramid_erosion = 2
-	kernel = np.array([[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]] ,np.uint8)
+	pyramid_erosion = -1
+	# kernel = np.array([[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]] ,np.uint8)
 
 	for i in range(len(r['class_ids'])):
 		
@@ -240,6 +241,11 @@ def sample_boxes(r):
 		pyramid_level = int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((r['rois'][i,2]-r['rois'][i,0])*(r['rois'][i,3]-r['rois'][i,1]))))))
 		# save to list to initialize object later
 		pyr_levels += [pyramid_level]
+		
+
+		M1, M2 = pyr_sizes(pyramid_level) 
+		M2 = M2//2
+		kernel = np.ones(M2)
 
 		if pyramid_level > pyramid_erosion:
 			mask_image = cv2.erode((r['masks'][:,:,i]).astype(np.uint8), kernel, iterations=1).astype(bool)
@@ -249,7 +255,7 @@ def sample_boxes(r):
 		# feature pyramid particle constants that correspond to object size
 		# 1: same pyramid
 		# 2: lower pyramid
-		M1, M2 = pyr_sizes(pyramid_level) 
+
 		N1, N2 = num_particles(mask_image)
 
 		# visualize particle constants
@@ -270,15 +276,18 @@ def sample_boxes(r):
 		bboxes2_batch = np.vstack((bboxes2_batch,bboxes2))
 		split_list += [N2]
 
-		#visualize bounding boxes
-		# for i in range(bboxes1.shape[0]):
-		# 	cv2.rectangle(image,tuple([bboxes1[i][1], bboxes1[i][0]]),tuple([bboxes1[i][3], bboxes1[i][2]]),(0,255,0),1)
-		# for i in range(bboxes2.shape[0]):
-		# 	cv2.rectangle(image,tuple([bboxes2[i][1], bboxes2[i][0]]),tuple([bboxes2[i][3], bboxes2[i][2]]),(0,255,0),1)
+	#visualize bounding boxes
+	if image is not None:
+	# 	for i in range(bboxes2_batch.shape[0]):
+	# 		cv2.circle(image, ((bboxes2_batch[i,1]+bboxes2_batch[i,3])//2, (bboxes2_batch[i,0]+bboxes2_batch[i,2])//2), 1, (0,0,255), 1)
+	# 	# for i in range(bboxes1.shape[0]):
+	# 	# 	cv2.rectangle(image,tuple([bboxes1[i][1], bboxes1[i][0]]),tuple([bboxes1[i][3], bboxes1[i][2]]),(0,255,0),1)
+		for i in list(np.random.choice(range(bboxes2_batch.shape[0]), 15)):
+			cv2.rectangle(image,tuple([bboxes2_batch[i][1], bboxes2_batch[i][0]]),tuple([bboxes2_batch[i][3], bboxes2_batch[i][2]]),(0,255,0),1)
 
-		# normalize bboxes
-		# bboxes1 = np.array([normalize_boxes(bboxes1, image.shape[:2])])
-		# cv2.imshow('im', image)
-		# cv2.waitKey(0)
+	# # normalize bboxes
+	# # bboxes1 = np.array([normalize_boxes(bboxes1, image.shape[:2])])
+	# 	cv2.imshow('im', image)
+	# 	cv2.waitKey(0)
 
-	return pyr_levels, bboxes2_batch, split_list
+	return pyr_levels, bboxes2_batch, split_list, image
