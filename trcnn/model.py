@@ -486,6 +486,34 @@ class trackedObject():
                 if self._occluded_cnt > 5: # Frames being occluded
                     self.tracking_state = 'Lost'
 
+    def refress_encoding(self, particles):
+
+        # encoding consists of two arrays
+        # a card(particles)x dim(feature_vec) array of features for each particle
+        # a card(particles)x 4 array of bounding boxes for each particle 
+        # [feat_array, box_array]
+        num_particles = max(len(particles[0]), len(self.encoding[0]))
+        # if num_particles < 60:
+        #     print('Before merging')
+        #     print('obj {}'.format(self.encoding[0]))
+        #     print('temp {}'.format(particles[0]))
+        N = len(particles[0]) + len(self.encoding[0])
+
+        p_n = [2/3/len(self.encoding[0])]*len(self.encoding[0])
+        p_o = [1/3/len(particles[0])]*len(particles[0])
+        p = p_n + p_o
+        print(sum(p))
+        enc_all = [np.vstack((particles[0],self.encoding[0])), np.vstack((particles[1],self.encoding[1]))] 
+        point_val = np.random.choice(np.array(list(range(0,N))), size = num_particles, p=p , replace = False)
+
+        new_enc = [enc_all[0][point_val], enc_all[1][point_val]]
+
+        self.encoding = new_enc
+        # if num_particles < 60:
+        #     print('After merging')
+        #     print('obj {}'.format(self.encoding))
+
+
     def motion_prediction(self):
 
         self.v_pred = self.vel_predict()

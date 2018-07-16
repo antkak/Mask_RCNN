@@ -313,7 +313,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 				obj_list[i].refresh_state(True)
 				obj_list[i].update_motion(temp_list[col_ind[i]].bbox)
 				obj_list[i].mask = temp_list[col_ind[i]].mask
-				obj_list[i].encoding = temp_list[col_ind[i]].encoding
+				# obj_list[i].encoding = temp_list[col_ind[i]].encoding
+				obj_list[i].refress_encoding(temp_list[col_ind[i]].encoding)
 				obj_list[i].class_name = temp_list[col_ind[i]].class_name
 				temp_matched[col_ind[i]] = True
 			# if there is no match, this object is occluded in this frame (or lost if it 
@@ -378,8 +379,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 
 if __name__ == '__main__':
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
-	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0014'
+	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
+	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017'
 	st_mot = datetime.now()
 	print([x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)])
 	print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
