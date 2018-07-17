@@ -127,7 +127,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	st_i = 1
 	feat_sets = []
 	for i in range(len(split_list)):
-		feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]]]#[[[bboxes1, app1], [bboxes2, app2]]]
+		feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:], \
+						np.ones(len(app2[st_i:split_list[i]+st_i,:])) ]]#[[[bboxes1, app1], [bboxes2, app2]]]
 		st_i += split_list[i]
 	print("Appearance encoding of particles: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
@@ -218,7 +219,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		st_i = 1
 		feat_sets = []
 		for i in range(len(split_list)):
-			feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]]]#[[[bboxes1, app1], [bboxes2, app2]]]
+			feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:],\
+						np.ones(len(app2[st_i:split_list[i]+st_i,:]))]]#[[[bboxes1, app1], [bboxes2, app2]]]
 			st_i += split_list[i]
 
 
@@ -247,14 +249,19 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 		# APPEARANCE SIMILARITY #
 		# Compare old and new objects' appearance 
+		buddy_list = []
 		peek_matrix = np.zeros((len(obj_list),len(temp_list)))
 		for i in range(len(obj_list)):
+			buddy_list_j = [] 
 			for j in range(len(temp_list)):
 				# peek_matrix[i,j] = simple_dist(obj_list[i],temp_list[j])
 				# if np.abs(obj_list[i].pyramid - temp_list[j].pyramid) > 2:
 				# 	peek_matrix[i,j] = 100
 				# else:
-				peek_matrix[i,j] = 1-bbs(obj_list[i],temp_list[j])
+				bb_sim, bb_i = bbs(obj_list[i],temp_list[j])
+				peek_matrix[i,j] = 1-bb_sim
+				buddy_list_j += [bb_i]
+			buddy_list += [buddy_list_j]
 		# pad cost matrix if more old objects than new objects
 		if peek_matrix.shape[0] > peek_matrix.shape[1]:
 			peek_matrix = squarify(peek_matrix, 100)
@@ -314,7 +321,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 				obj_list[i].update_motion(temp_list[col_ind[i]].bbox)
 				obj_list[i].mask = temp_list[col_ind[i]].mask
 				# obj_list[i].encoding = temp_list[col_ind[i]].encoding
-				obj_list[i].refress_encoding(temp_list[col_ind[i]].encoding)
+				obj_list[i].refress_encoding(temp_list[col_ind[i]].encoding, buddy_list[i][col_ind[i]])
 				obj_list[i].class_name = temp_list[col_ind[i]].class_name
 				temp_matched[col_ind[i]] = True
 			# if there is no match, this object is occluded in this frame (or lost if it 
@@ -380,7 +387,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 if __name__ == '__main__':
 	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
-	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017'
+	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017s'
 	st_mot = datetime.now()
 	print([x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)])
 	print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))

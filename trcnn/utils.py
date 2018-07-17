@@ -83,19 +83,7 @@ def pyr_sizes(level):
 	'''
 	Assign sample bbox width (= height) for current and lower pyramid level
 	'''
-	
-	if level == 0:
-		return 14, 7
-	elif level == 1:
-		return 28, 14
-	elif level == 2:
-		return 56, 28
-	elif level == 3:
-		return 112, 56
-	elif level == 4:
-		return 224, 112
-	else:
-		return 448, 224
+	return int(np.floor(7*np.exp2(level+1))), int(np.floor(7*np.exp2(level)))
 
 def num_particles(mask):
 	'''
@@ -136,18 +124,23 @@ def bbs(obj1, obj2):
 	A growing in efficiency implementation of best buddies similarity metric
 	'''
 	particles1 = obj1.encoding[1]
-	boxes1 	  = obj1.encoding[0]
+	boxes1 	   = obj1.encoding[0]
+	probs1     = obj1.encoding[2]
 	particles2 = obj2.encoding[1]
-	boxes2 	  = obj2.encoding[0]
+	boxes2 	   = obj2.encoding[0]
+	probs2     = obj2.encoding[2]
 
 
 	## Sample down the largest set of particles for unbiased metric
 	if len(particles1) > len(particles2):
 		# resample particles 1 in size of particles 2
+		l2 = False
 		indices = np.random.choice(np.array(range(len(particles1))), len(particles2), replace=False) # should introduce probabilities? not sure
 		particles1 = particles1[indices]
 		boxes1 = boxes1[indices]
+
 	else:
+		l2 = True
 		# resample particles 2 in size of particles 1
 		indices = np.random.choice(np.array(range(len(particles2))), len(particles1), replace=False) # should introduce probabilities? not sure
 		particles2 = particles2[indices]
@@ -185,12 +178,18 @@ def bbs(obj1, obj2):
 		buddies2[i] = np.argmin(buddy[:,i])
 
 	buddy_count = 0
+	buddy_p = []
 	for i in range(len(particles1)):
 		index = buddies1[i]
 		if buddies2[int(index)] == i:
 			buddy_count += 1
+			buddy_p += [int(index)]
 
-	return buddy_count/min(len(particles1),len(particles2))
+	# if particles2 were downsampled, use original indices
+	if l2:
+		buddy_p = [indices[x] for x in buddy_p]
+
+	return buddy_count/min(len(particles1),len(particles2)), buddy_p
 
 def random_sampling(mask, num_points):
 
@@ -241,12 +240,13 @@ def sample_boxes(r, image=None):
 	for i in range(len(r['class_ids'])):
 		
 		# feature pyramid that corresponds to object size
-		pyramid_level = int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((r['rois'][i,2]-r['rois'][i,0])*(r['rois'][i,3]-r['rois'][i,1]))))))
+		pyr = 4+np.log2(1/224*np.sqrt(np.abs((r['rois'][i,2]-r['rois'][i,0])*(r['rois'][i,3]-r['rois'][i,1]))))
+		pyramid_level = int(np.floor(pyr))
 		# save to list to initialize object later
 		pyr_levels += [pyramid_level]
 		
 
-		M1, M2 = pyr_sizes(pyramid_level) 
+		M1, M2 = pyr_sizes(pyr) 
 		M2 = M2//4
 		# kernel = np.ones((M2,M2))
 		kernel = skimage.morphology.diamond(M2//2)
@@ -261,7 +261,7 @@ def sample_boxes(r, image=None):
 		# 2: lower pyramid
 
 		N1, N2 = num_particles(mask_image)
-		# N2 *= 2
+		N2 *= 2
 
 		# visualize particle constants
 		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M1//2, (0,0,255), 1)

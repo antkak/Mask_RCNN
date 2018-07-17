@@ -486,8 +486,11 @@ class trackedObject():
                 if self._occluded_cnt > 5: # Frames being occluded
                     self.tracking_state = 'Lost'
 
-    def refress_encoding(self, particles):
+    def refress_encoding(self, particles, buddy_list):
 
+        c_old = 0.8
+        c_bb = 1
+        # print(buddy_list)
         # encoding consists of two arrays
         # a card(particles)x dim(feature_vec) array of features for each particle
         # a card(particles)x 4 array of bounding boxes for each particle 
@@ -499,14 +502,18 @@ class trackedObject():
         #     print('temp {}'.format(particles[0]))
         N = len(particles[0]) + len(self.encoding[0])
 
-        p_n = [2/3/len(self.encoding[0])]*len(self.encoding[0])
-        p_o = [1/3/len(particles[0])]*len(particles[0])
-        p = p_n + p_o
-        print(sum(p))
-        enc_all = [np.vstack((particles[0],self.encoding[0])), np.vstack((particles[1],self.encoding[1]))] 
+        # p_n = [2/3/len(self.encoding[0])]*len(self.encoding[0])
+        # p_o = [1/3/len(particles[0])]*len(particles[0])
+        # p = p_n + p_o
+        self.encoding[2] *= c_old
+        particles[2][buddy_list] *= c_bb
+        probs = np.hstack((particles[2],self.encoding[2]))
+        p = probs/np.sum(probs)
+        # print(sum(p))
+        enc_all = [np.vstack((particles[0],self.encoding[0])), np.vstack((particles[1],self.encoding[1])), probs ] 
         point_val = np.random.choice(np.array(list(range(0,N))), size = num_particles, p=p , replace = False)
 
-        new_enc = [enc_all[0][point_val], enc_all[1][point_val]]
+        new_enc = [enc_all[0][point_val], enc_all[1][point_val], probs[point_val]]
 
         self.encoding = new_enc
         # if num_particles < 60:
