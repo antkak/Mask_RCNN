@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.spatial.distance import correlation, cosine, euclidean
 from numba import jit
 import cv2
 import skimage
@@ -26,8 +25,8 @@ def keepClasses(r, classes, class_names):
 	class_indices = [class_names.index(c) for c in classes]
 
 	# Get all indices of relevant classes
-	# ri = [ i for i in range(len(r['class_ids'])) if (r['class_ids'][i] in class_indices and r['rois'][i,:][2]-r['rois'][i,:][0] >= 25 )]
-	ri = [ i for i in range(len(r['class_ids'])) if r['class_ids'][i] in class_indices]
+	ri = [ i for i in range(len(r['class_ids'])) if (r['class_ids'][i] in class_indices and r['rois'][i,:][2]-r['rois'][i,:][0] >= 25 )]
+	# ri = [ i for i in range(len(r['class_ids'])) if r['class_ids'][i] in class_indices]
 
 	# Sample results (r) that match relevant indices
 	return {
@@ -40,14 +39,6 @@ def keepClasses(r, classes, class_names):
 		"images": r['images'],
 		"detections": r['detections'][:,ri,:]
 	}
-
-
-def simple_dist(object1, object2):
-	'''
-	find distance between two object encodings
-	'''
-
-	return cosine(object1.encoding,object2.encoding)
 
 
 def box_dist(bbox1, bbox2):
@@ -95,12 +86,12 @@ def num_particles(mask):
 	# print('mask points:{} particles: {}'.format( np.sum(mask), N ) )
 	return N//4, N
 
-
 @jit(parallel=True)
 def batch_cosine_dist(p1,p2):
+	#  https://nyu-cds.github.io/python-numba/05-cuda/
 	'''
 	Compute the pairwise cosine distance of the rows of p1
-	and p2
+	and p2. They are assumed to be normalized.
 	'''
 	l_w = 2
 	p_len  = len(p1[0])
@@ -109,14 +100,33 @@ def batch_cosine_dist(p1,p2):
 	for i in range(p_card):
 		for j in range(p_card):
 			dot = 0
-			denom_a = 0
-			denom_b = 0
+			# denom_a = 0
+			# denom_b = 0
 			for k in range(p_len):
 				dot += p1[i,k]*p2[j,k]
-				denom_a += p1[i,k]*p1[i,k]
-				denom_b += p2[j,k]*p2[j,k]
-			dist_matrix[i,j] = 1 - dot/(np.sqrt(denom_a)*np.sqrt(denom_b))
+				# denom_a += p1[i,k]*p1[i,k]
+				# denom_b += p2[j,k]*p2[j,k]
+			# dist_matrix[i,j] = 1 - dot/(np.sqrt(denom_a)*np.sqrt(denom_b))
+			dist_matrix[i,j] = 1 - dot
 	return dist_matrix
+
+# def cuda_cosine_dist(p1,p2):
+
+# 	p_len  = len(p1[0])
+# 	p_card = len(p1)
+# 	dist_matrix = np.zeros(p_len)
+# 	for i in range(p_card):
+# 		x = tf.constant(np.tile(p1[i], (p_card,1)))
+# 		y = tf.constant(p2)
+# 		s = tf.losses.cosine_distance(tf.nn.l2_normalize(x, 0), tf.nn.l2_normalize(y, 0), axis=0, reduction=tf.losses.Reduction.NONE)
+# 		m = tf.Session().run(s)
+# 		# print(m.shape)
+# 		dist_matrix = np.vstack((dist_matrix, m))
+# 		# print(dist_matrix)
+# 	# print(dist_matrix[1:,:])
+# 	return dist_matrix[1:,:]
+
+
 
 
 def bbs(obj1, obj2):
@@ -157,7 +167,9 @@ def bbs(obj1, obj2):
 	# normalize coords dividing with the largest bounding boxes' dimensions (for occlusions) ? TODO?
 	
 	# include spatial distance for faithful bbs
-	buddy = batch_cosine_dist(particles1, particles2)
+# `	buddy = batch_cosine_dist(particles1, particles2)
+	buddy = 1 - np.dot(particles1, particles2.T)
+	# buddy = cuda_cosine_dist(particles1, particles2)
 	# print(buddy[0])
 	# l_w = 2
 	# for i in range(len(particles1)):
@@ -196,31 +208,17 @@ def random_sampling(mask, num_points):
 	N = np.sum(mask)
 	if num_points > N:
 		num_points = N
-	point_val = np.random.choice(np.array(list(range(1,N+1))), size = num_points, replace = False)
+	# try: make all mask indices
+	#	# np.random.choice them	
+	pairs = np.array(list(zip(*np.where(mask == 1))))
+	# print(pairs)
 
-	return _random_sampling(mask,point_val)
+	# ran_pairs = np.random.choice(pairs, size = num_points, replace = False)
+	point_val = np.random.choice(np.array(list(range(N))), size = num_points, replace = False)
+	# print(point_val)
+	# return _random_sampling(mask,point_val)
+	return pairs[point_val]
 
-@jit
-def _random_sampling(mask, point_val):
-
-	points_found = 0
-	points = []
-	# give id to each of the track
-	ii = 1
-	mask = mask.astype(int)
-	for i in range(mask.shape[0]):
-		for j in range(mask.shape[1]):
-			if mask[i,j]==1:
-				mask[i,j]= ii
-				ii += 1
-
-	points = []
-	for val in point_val:
-		inds = []
-		for x in np.where(mask==val):
-			inds += [np.asscalar(x)]
-		points += [inds]
-	return points
 
 def sample_boxes(r, image=None):
 	'''
@@ -261,7 +259,7 @@ def sample_boxes(r, image=None):
 		# 2: lower pyramid
 
 		N1, N2 = num_particles(mask_image)
-		N2 *= 2
+		N2 *= 4
 
 		# visualize particle constants
 		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M1//2, (0,0,255), 1)

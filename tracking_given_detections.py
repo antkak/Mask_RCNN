@@ -14,19 +14,18 @@ ROOT_DIR = os.path.abspath("./")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from trcnn.utils import squarify, keepClasses, simple_dist, box_dist, tensor2vec, \
-						bbs, sample_boxes
+from trcnn.utils import squarify, box_dist, bbs, sample_boxes
+						
 import trcnn.model as tracker
 from trcnn.model import trackedObject as tob
 from trcnn.model import normalize_boxes
-from mrcnn import visualize
 
 # Import COCO config
 sys.path.append(os.path.join(ROOT_DIR, "samples/coco/"))  # To find local version
 import coco
 
 # Import measurement for tracking 
-from measurements import  save_instances,  save_statistics
+from measurements import  save_instances
 
 print("Import: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
@@ -46,6 +45,12 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 	# Output tracking file name
 	trackf = input_dir[-4:] + '.txt'
+
+	# Log some info
+	logf = input_dir[-4:] + 'log' + '.txt'
+	# delete file contents if exist
+	open(logf, 'w').close()
+	lgf = open(logf, 'a')
 
 	# COCO Class names
 	# Index of the class in the list is its ID. 
@@ -95,10 +100,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	## == run the detector (+4 seconds GPU)
 	f = open(join(pickle_dir, pickles[0]),'rb')
 	r = pickle.load(f)
-
-	# Read detections from model output (detections contain rois in normalized coords)
-	# OR normalize bboxes using tracker.normalize_boxes
-	rois = r['detections'][:,:,0:4]
 		
 	st = datetime.now()			
 	# Compute particle bounding boxes and pyramid levels
@@ -127,8 +128,10 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	st_i = 1
 	feat_sets = []
 	for i in range(len(split_list)):
-		feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:], \
-						np.ones(len(app2[st_i:split_list[i]+st_i,:])) ]]#[[[bboxes1, app1], [bboxes2, app2]]]
+		# feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:], \
+		# 				np.ones(len(app2[st_i:split_list[i]+st_i,:])) ]]#[[[bboxes1, app1], [bboxes2, app2]]]
+		feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]/np.linalg.norm(app2[st_i:split_list[i]+st_i,:], axis = 1)[:,None],\
+					np.ones(len(app2[st_i:split_list[i]+st_i,:]))]]#[[[bboxes1, app1], [bboxes2, app2]]]
 		st_i += split_list[i]
 	print("Appearance encoding of particles: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
@@ -162,6 +165,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	for frame in frames[1:]:
 		jj += 1
 		print("Frame {}".format(jj))
+		lgf.write("Frame {}\n".format(jj))
 
 		# read frame
 		st = datetime.now() 
@@ -190,9 +194,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		print("Detections: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		st = datetime.now() 
 
-		# Run roi encoding for appearance description
-		rois = r['detections'][:,:,0:4]
-
 		# Compute particle bounding boxes and pyramid levels
 		pyr_levels, bboxes2_batch, split_list, image = sample_boxes(r, image=image)
 
@@ -216,10 +217,11 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 		# append features to feature list
 		# st_i = 1 because bboxes2_abs_batch first row is dummy (zero initialization)
+
 		st_i = 1
 		feat_sets = []
 		for i in range(len(split_list)):
-			feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:],\
+			feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]/np.linalg.norm(app2[st_i:split_list[i]+st_i,:], axis = 1)[:,None],\
 						np.ones(len(app2[st_i:split_list[i]+st_i,:]))]]#[[[bboxes1, app1], [bboxes2, app2]]]
 			st_i += split_list[i]
 
@@ -267,6 +269,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			peek_matrix = squarify(peek_matrix, 100)
 
 		print(peek_matrix)
+		lgf.write(str(peek_matrix))
+		lgf.write('\n')
 
 		#assert(False)
 		# # MOTION CONGRUENCE #
@@ -293,11 +297,17 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# log assignment
 		print(row_ind)
 		print(col_ind)
+		lgf.write(str(row_ind))
+		lgf.write('\n')
+		lgf.write(str(col_ind))
+		lgf.write('\n')
 
 		matching_scores = []
 		for i in row_ind:
 			matching_scores += [peek_matrix[i,col_ind[i]]]
 		print(matching_scores)
+		lgf.write(str(matching_scores))
+		lgf.write('\n')
 
 
 		num_old = len(obj_list)
@@ -320,10 +330,10 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 				obj_list[i].refresh_state(True)
 				obj_list[i].update_motion(temp_list[col_ind[i]].bbox)
 				obj_list[i].mask = temp_list[col_ind[i]].mask
-				# obj_list[i].encoding = temp_list[col_ind[i]].encoding
 				obj_list[i].refress_encoding(temp_list[col_ind[i]].encoding, buddy_list[i][col_ind[i]])
 				obj_list[i].class_name = temp_list[col_ind[i]].class_name
 				temp_matched[col_ind[i]] = True
+				obj_list[i].score = peek_matrix[i,col_ind[i]]
 			# if there is no match, this object is occluded in this frame (or lost if it 
 			# is occluded for more than N frames)
 			else:
@@ -336,6 +346,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			# for new object initialization the detection score should be >= det_thresh
 			if not temp_matched[i] and temp_scores[i] >= det_thresh:
 				temp_list[i].id = track_id
+				temp_list[i].score = temp_scores[i]
 				track_id += 1
 				obj_list += [temp_list[i]]
 
@@ -359,13 +370,14 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			masks[:,:,i] = obj_list_fr[i].mask
 
 		# save current frame with found objects
-		save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
-						class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
-						file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
+		# 				class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
+		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
 		# Use this saving code snippet to show pyramid level for debugging
 		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
 		# 				class_names, ids = ['P_'+str(int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))))))) for x in obj_list_fr], 
 		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+
 		print("Saving Image: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		with open(trackf, 'a') as trf:
 			for obj in obj_list:
