@@ -132,6 +132,8 @@ def batch_cosine_dist(p1,p2):
 def bbs(obj1, obj2):
 	'''
 	A growing in efficiency implementation of best buddies similarity metric
+	returns: bbs metric
+			 bb pairs
 	'''
 	particles1 = obj1.encoding[1]
 	boxes1 	   = obj1.encoding[0]
@@ -190,18 +192,27 @@ def bbs(obj1, obj2):
 		buddies2[i] = np.argmin(buddy[:,i])
 
 	buddy_count = 0
-	buddy_p = []
+	buddy_b = []
 	for i in range(len(particles1)):
 		index = buddies1[i]
 		if buddies2[int(index)] == i:
 			buddy_count += 1
-			buddy_p += [int(index)]
+			buddy_b += [[list(boxes1[i]),list(boxes2[int(index)])]]
 
 	# if particles2 were downsampled, use original indices
-	if l2:
-		buddy_p = [indices[x] for x in buddy_p]
+	# buddy_p contains the pairs of indices of matched particles
+	# for examples boxes1[buddy_p[0][0]] and boxes2[buddy_p[1][0]]
+	# are the boxes that match
+	# if l2:
+	# 	buddy_p = [[indices[x[0]], x[1]] for x in buddy_p]
+	# else:
+	# 	buddy_p = [[x[0], indices[x[1]]] for x in buddy_p]
 
-	return buddy_count/min(len(particles1),len(particles2)), buddy_p
+
+	# print(buddy_p)
+	# print(len(buddy_p))
+
+	return buddy_count/min(len(particles1),len(particles2)), buddy_b
 
 def random_sampling(mask, num_points):
 

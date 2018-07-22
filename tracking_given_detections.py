@@ -162,6 +162,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 	# for each following frame, run the (classic) MOT algorithm
 	jj = 0
+	patches = []
 	for frame in frames[1:]:
 		jj += 1
 		print("Frame {}".format(jj))
@@ -179,8 +180,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# For each object a (2D image) velocity and (2D image)location is computed
 		# Models for motion prediction include Kalman Filtering, Constant velocity
 		# assumption, but can also be modeled with RNNs (TODOs). Here we use the CVA
-		# for obj in obj_list:
-		# 	obj.motion_prediction()
+		for obj in obj_list:
+			obj.motion_prediction()
 		
 		# TODO: Gating
 
@@ -254,16 +255,21 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		buddy_list = []
 		peek_matrix = np.zeros((len(obj_list),len(temp_list)))
 		for i in range(len(obj_list)):
-			buddy_list_j = [] 
+			buddy_list_i = []
 			for j in range(len(temp_list)):
 				# peek_matrix[i,j] = simple_dist(obj_list[i],temp_list[j])
 				# if np.abs(obj_list[i].pyramid - temp_list[j].pyramid) > 2:
 				# 	peek_matrix[i,j] = 100
 				# else:
-				bb_sim, bb_i = bbs(obj_list[i],temp_list[j])
+				bb_sim, bb_b = bbs(obj_list[i],temp_list[j])
 				peek_matrix[i,j] = 1-bb_sim
-				buddy_list_j += [bb_i]
-			buddy_list += [buddy_list_j]
+				buddy_list_i += [bb_b]
+				# print(buddy_list_i)
+				# print('\n')
+			buddy_list += [buddy_list_i]
+		print(buddy_list)
+		print('\n')
+
 		# pad cost matrix if more old objects than new objects
 		if peek_matrix.shape[0] > peek_matrix.shape[1]:
 			peek_matrix = squarify(peek_matrix, 100)
@@ -321,25 +327,34 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 		# match_threshold = 100
 		# propagate previous objects in new frame
+		# also save pairs of bounding boxes
+		pairs = []
 		for i in range(num_old):
 			# if there is a match (old>temp)
 			# TODO: treshold matching score
-			if col_ind[i] < num_new: #and peek_matrix[i,col_ind[i]] < match_threshold:
+			j = col_ind[i]
+			if j < num_new: #and peek_matrix[i,col_ind[i]] < match_threshold:
 			# if col_ind[i] < num_new:
 				# refress data
 				obj_list[i].refresh_state(True)
-				obj_list[i].update_motion(temp_list[col_ind[i]].bbox)
-				obj_list[i].mask = temp_list[col_ind[i]].mask
-				obj_list[i].refress_encoding(temp_list[col_ind[i]].encoding, buddy_list[i][col_ind[i]])
-				obj_list[i].class_name = temp_list[col_ind[i]].class_name
-				temp_matched[col_ind[i]] = True
-				obj_list[i].score = peek_matrix[i,col_ind[i]]
+				obj_list[i].update_motion(temp_list[j].bbox)
+				obj_list[i].mask = temp_list[j].mask
+
+				pairs += [buddy_list[i][j]]
+				# pairs += box_pairs
+
+				obj_list[i].refress_encoding(temp_list[j].encoding, buddy_list[i][j])
+				obj_list[i].class_name = temp_list[j].class_name
+				temp_matched[j] = True
+				obj_list[i].score = 1 - peek_matrix[i,j]
+
+
 			# if there is no match, this object is occluded in this frame (or lost if it 
 			# is occluded for more than N frames)
 			else:
 				obj_list[i].refresh_state(False)
 				obj_list[i].update_motion(None)
-
+		patches += [pairs]
 		# initialize new objects
 		det_thresh = 0.7
 		for i in range(num_new):
@@ -355,7 +370,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		########################################
 
 		# keep objects appeared in current frame
-		obj_list_fr = [x for x in obj_list if x.tracking_state=='Tracked' or x.tracking_state=='New']
+		obj_list_fr = [x for x in obj_list if x.tracking_state=='Tracked' or x.tracking_state=='New' or x.tracking_state == 'Occluded']
 		num_obj = len(obj_list_fr)
 
 		print("Identity propagation: {} (hh:mm:ss.ms)".format(datetime.now()-st))
@@ -381,7 +396,9 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		print("Saving Image: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		with open(trackf, 'a') as trf:
 			for obj in obj_list:
-				if obj.tracking_state == 'New' or obj.tracking_state == 'Tracked':
+				# if obj.tracking_state == 'New' or obj.tracking_state == 'Tracked':
+				if obj.in_frame(image.shape) and obj.smooth_traj and obj._occluded_cnt < 2:
+				# if  obj.smooth_traj and obj._occluded_cnt < 2:
 					trf.write("{} {} {} 0 0 -10.0 {} {} {} {} -1000.0 -1000.0 -1000.0 -10.0 -1 -1 -1 {}\n".format(
 								jj, obj.id, class_names[obj.class_name], 
 								float(obj.bbox[1]), float(obj.bbox[0]), float(obj.bbox[3]), float(obj.bbox[2]), 1))
@@ -392,6 +409,24 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		lost_obj += [x for x in obj_list if x.tracking_state=='Lost']
 		obj_list = [x for x in obj_list if x.tracking_state!='Lost']
 
+	# code for best buddies visualization
+	import cv2
+	for i, patch in zip(range(len(frames)), patches):
+		img1 = skimage.io.imread(os.path.join(IMAGE_DIR,frames[i]))
+		img2 = skimage.io.imread(os.path.join(IMAGE_DIR,frames[i+1]))
+		h,w,_ = img1.shape
+		for p in patch:
+			image = np.concatenate((img1, img2), axis=1)
+			for pair in p:
+				cv2.rectangle(image,tuple([pair[0][1], pair[0][0]]),tuple([pair[0][3],   pair[0][2]]),(0,255,0),1)
+				cv2.rectangle(image,tuple([pair[1][1]+w, pair[1][0]]),tuple([pair[1][3]+w, pair[1][2]]),(0,255,0),1)
+				cv2.line(image, tuple([pair[0][1], pair[0][0] ]), tuple([pair[1][1]+w, pair[1][0]]), (0,255,0), 1)
+			cv2.imshow('im', image)
+			cv2.waitKey(0)
+		if i > 2:
+			break
+
+
 	return obj_list
 
 
@@ -400,12 +435,14 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 if __name__ == '__main__':
 	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
 	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017s'
+	# input_dir =  '/home/anthony/mbappe'
+	# pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/mbappe'
+	# input_dir = '/home/anthony/nascar/frames'
+	# pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/nascar'
 	st_mot = datetime.now()
 	print([x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)])
 	print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
-	# mask = np.array([[True, True, True],
-	# 				 [False, False, True]])
-	# print(random_sampling(mask, None))
+
 
 
 

@@ -14,6 +14,26 @@ import colorsys
 import random
 
 # TrackRCNN adds functionality to MaskRCNN for tracking 
+def IoU(boxA, boxB):
+    xA = max(boxA[1], boxB[1])
+    yA = max(boxA[0], boxB[0])
+    xB = min(boxA[3], boxB[3])
+    yB = min(boxA[2], boxB[2])
+    # compute the area of intersection rectangle
+    interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
+ 
+    # compute the area of both the prediction and ground-truth
+    # rectangles
+    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
+    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
+ 
+    # compute the intersection over union by taking the intersection
+    # area and dividing it by the sum of prediction + ground-truth
+    # areas - the interesection area
+    iou = interArea / float(boxAArea + boxBArea - interArea)
+
+    return iou
+
 
 class TrackRCNN(modellib.MaskRCNN):
 
@@ -562,6 +582,7 @@ class trackedObject():
         self.v = [0,0]                  # current velocity
         self.pyramid = pyramid
         self.score = 0
+        self.smooth_traj = True
 
     def init_color(self):
         N = 20
@@ -569,6 +590,15 @@ class trackedObject():
         hsv = [(i / N, 1, brightness) for i in range(N)]
         colors = list(map(lambda c: colorsys.hsv_to_rgb(*c), hsv))
         return random.choice(colors)
+
+    def in_frame(self, shape):
+        if self.bbox[0]<0 or self.bbox[1]<0 or self.bbox[2]< 0 or self.bbox[3]< 0:
+            return False
+        if self.bbox[0] > shape[0] or self.bbox[2] > shape[0]:
+            return False
+        if self.bbox[1] > shape[1] or self.bbox[3] > shape[1]:
+            return False
+        return True
 
     def refresh_state(self, matched):
 
@@ -595,7 +625,7 @@ class trackedObject():
     def refress_encoding(self, particles, buddy_list):
 
         c_old = 0.8
-        c_bb = 1
+        # c_bb = 1
         # print(buddy_list)
         # encoding consists of two arrays
         # a card(particles)x dim(feature_vec) array of features for each particle
@@ -612,7 +642,7 @@ class trackedObject():
         # p_o = [1/3/len(particles[0])]*len(particles[0])
         # p = p_n + p_o
         self.encoding[2] *= c_old
-        particles[2][buddy_list] *= c_bb
+        # particles[2][buddy_list] *= c_bb
         probs = np.hstack((particles[2],self.encoding[2]))
         p = probs/np.sum(probs)
         # print(sum(p))
@@ -641,9 +671,17 @@ class trackedObject():
             assert(bbox_obs is not None)
             self.v = self.compute_vel(bbox_obs)
             self.bbox = bbox_obs 
+            if IoU(self.bbox, self.bbox_pred) > 0.5:
+                self.smooth_traj = True 
+            else:
+                self.smooth_traj = False
         elif self.tracking_state == 'Occluded':
             assert(bbox_obs is None)
             self.v = self.v_pred
+            if IoU(self.bbox, self.bbox_pred) > 0.5:
+                self.smooth_traj = True 
+            else:
+                self.smooth_traj = False
             self.bbox = self.bbox_pred
         else:
             # Lost, Do nothing really

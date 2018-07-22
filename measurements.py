@@ -195,16 +195,16 @@ def visualize_gt(frames_dir, gt_dir, save_dir):
 
 		# save frame with gt
 		save_instances(image, boxes, np.array([0]*len(boxes)), class_ids, class_names,
-						  scores=scores, ax=None, colors=[[1,1,1]]*len(boxes),
+						  ids=scores, ax=None, colors=[[1,1,1]]*len(boxes),
 						  show_mask=False, show_bbox=True,
 						  file_name=os.path.join(save_dir,str(frame)+'.png'))
 
-# if __name__ == "__main__":
+if __name__ == "__main__":
 
-# 	# frames_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0001'
-# 	gt_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/kitti_track/training/label_02/'
-# 	# save_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/temp'
-# 	# visualize_gt(frames_dir,gt_dir,save_dir)
+	frames_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
+	gt_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/kitti_track/training/label_02/0017.txt'
+	save_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/temp'
+	visualize_gt(frames_dir,gt_dir,save_dir)
 # 	gt_names = [f for f in listdir(gt_dir) if isfile(join(gt_dir, f))]
 # 	for name in gt_names:
 # 		track_len_histogram(join(gt_dir,name), file_name = name[:-3]+'png')
