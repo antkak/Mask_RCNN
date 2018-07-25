@@ -15,6 +15,7 @@ from os import listdir
 from os.path import isfile, join
 import skimage.io
 from collections import Counter
+np.seterr(divide='ignore', invalid='ignore')
 
 
 def apply_mask(image, mask, color, alpha=0.5):
@@ -36,7 +37,7 @@ def random_colors(N, bright=True):
 	brightness = 1.0 if bright else 0.7
 	hsv = [(i / N, 1, brightness) for i in range(N)]
 	colors = list(map(lambda c: colorsys.hsv_to_rgb(*c), hsv))
-	random.shuffle(colors)
+	# random.shuffle(colors)
 	return colors
 
 def save_instances(image, boxes, masks, class_ids, class_names,
@@ -199,12 +200,142 @@ def visualize_gt(frames_dir, gt_dir, save_dir):
 						  show_mask=False, show_bbox=True,
 						  file_name=os.path.join(save_dir,str(frame)+'.png'))
 
+def plot_tracks(frames_dir, gt_dir):
+	import cv2
+	# open gt_dir/gt.txt and save data
+	with open(gt_dir,'r') as gt_file:
+		gt_lines = [x.split(' ') for x in gt_file.readlines()]
+	
+	# Load image frames
+	file_names = [f for f in listdir(frames_dir) if isfile(join(frames_dir, f))]
+
+	# read frame
+	image = skimage.io.imread(os.path.join(frames_dir,sorted(file_names)[0]))
+	
+	# exract data from file and save image with gt
+	boxes = []
+	tracks = []
+	tid = str(0)
+	for frame, file_name in enumerate(sorted(file_names)):
+		
+		# extract relevant lines for frame
+		lines = [x for x in gt_lines if x[0]==str(frame)]
+
+		# extract relevant data for frame
+		boxes += [list(map(int,list(map(float,[x[7],x[6],x[9],x[8]])))) for x in lines if x[1] == tid ] # x1,y1,x2,y2 to y1, x1, y2, x2 
+																									  # cast to float from string
+																									  # floor to get int coords
+																									  # convert to np array
+		tracks += [int(x[1]) for x in lines if x[1] == tid]	
+
+	colors = random_colors(len(tracks))					
+
+
+	for i, box in enumerate(boxes):																							  
+		cv2.circle(image, ((box[1]+box[3])//2, (box[0]+box[2])//2), 1, tuple(255*np.array(colors[i])), 1)
+
+	cv2.imshow('im',image)
+	cv2.waitKey(0)
+
+def curv(a,th):
+	if len(a) < th:
+		return 0
+	a = np.array(a[-th:])
+	print(a)
+	dx_dt = np.gradient(a[:, 0])
+	dy_dt = np.gradient(a[:, 1])
+	ds_dt = np.sqrt(dx_dt * dx_dt + dy_dt * dy_dt)
+	d2x_dt2 = np.gradient(dx_dt)
+	d2y_dt2 = np.gradient(dy_dt)
+	curvature =   ds_dt*(d2x_dt2 * dy_dt - dx_dt * d2y_dt2) / (dx_dt * dx_dt + dy_dt * dy_dt)**1.5
+	#print(curvature)
+	return curvature[-3]
+
+
+def compute_curvatures(frames_dir, gt_dir):
+	import cv2
+	# open gt_dir/gt.txt and save data
+	with open(gt_dir,'r') as gt_file:
+		gt_lines = [x.split(' ') for x in gt_file.readlines()]
+	
+	# Load image frames
+	file_names = [f for f in listdir(frames_dir) if isfile(join(frames_dir, f))]
+
+	# read frame
+	image = skimage.io.imread(os.path.join(frames_dir,sorted(file_names)[0]))
+
+	objects = list(set([x[1] for x in gt_lines ]))
+	obj_num = len(list(set([x[1] for x in gt_lines ]))) - 1
+	leg = []
+	
+	# exract data from file and save image with gt
+	for tr_i in range(obj_num):
+		print(tr_i)
+		boxes = []
+		track_s = 0
+		tid = str(tr_i)
+		curvature = []
+		box_t = []
+		start_track  = False
+
+
+		for frame, file_name in enumerate(sorted(file_names)):
+			
+			# extract relevant lines for frame
+			lines = [x for x in gt_lines if x[0]==str(frame)]
+
+
+			# extract relevant data for frame
+			box = [list(map(int,list(map(float,[x[7],x[6],x[9],x[8]])))) for x in lines if x[1] == tid ] # x1,y1,x2,y2 to y1, x1, y2, x2 
+																										  # cast to float from string
+																										  # floor to get int coords
+																										  # convert to np array
+
+			if len(box) > 0:
+				box = box[0]
+				start_track = True
+				boxes += [[(box[1]+box[3])//2, (box[0]+box[2])//2]]
+				track_s += 1	
+				thresh = 5
+				curvature += [curv(boxes, thresh)]
+
+			else:
+				if not start_track:
+					curvature += [0]
+				else:
+					if len(boxes) > 2:
+						db = [boxes[-1][0] - boxes[-2][0], boxes[-1][1] - boxes[-2][1]]
+						boxes += [[boxes[-1][0] + db[0], boxes[-1][1] + db[1]]]
+						curvature += [curv(boxes, thresh)]
+					else:
+						boxes += [boxes[-1]]
+						curvature += [curvature[-1]]
+
+		colors = random_colors(track_s)					
+		# if tid == '1':
+		# 	for i, box in enumerate(boxes):																							  
+		# 		cv2.circle(image, (box[0], box[1]), 1, tuple(255*np.array(colors[i])), 1)
+		plt.plot(curvature)
+		leg += [tr_i]
+
+
+	plt.legend(leg, loc='upper left')
+	plt.show()
+
+	cv2.imshow('im',image)
+	cv2.waitKey(0)		
+
+
 if __name__ == "__main__":
 
-	frames_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
-	gt_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/kitti_track/training/label_02/0017.txt'
+	frames_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
+	# gt_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/kitti_track/training/label_02/0017.txt'
+	gt_dir = '/home/anthony/maskrcnn/Mask_RCNN/0014.txt'
 	save_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/temp'
-	visualize_gt(frames_dir,gt_dir,save_dir)
+	# visualize_gt(frames_dir,gt_dir,save_dir)
+	# plot_tracks(frames_dir, gt_dir)
+	compute_curvatures(frames_dir, gt_dir)
+
 # 	gt_names = [f for f in listdir(gt_dir) if isfile(join(gt_dir, f))]
 # 	for name in gt_names:
 # 		track_len_histogram(join(gt_dir,name), file_name = name[:-3]+'png')

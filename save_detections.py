@@ -48,10 +48,11 @@ def keepClasses(r, classes, class_names):
 print("Import: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 st = datetime.now()
 
-input_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
+# input_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0003'
+input_dir = '/home/anthony/nascar/frames'
 
 # Relevant classes
-classes_det = ['Car', 'Pedestrian']
+classes_det = ['Car', 'Pedestrian' ]
 
 # Directory to save logs and trained model
 MODEL_DIR = os.path.join(ROOT_DIR, "logs")
@@ -110,6 +111,7 @@ jj = -1
 detection_data = []
 for frame in frames:
 	jj += 1
+
 	print("Frame {}".format(jj))
 
 	# read frame

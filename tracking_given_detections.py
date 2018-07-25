@@ -1,5 +1,3 @@
-from datetime import datetime 
-st = datetime.now() 
 import skimage.io
 import os, sys
 from os.path import isfile, join
@@ -14,7 +12,7 @@ ROOT_DIR = os.path.abspath("./")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from trcnn.utils import squarify, box_dist, bbs, sample_boxes
+from trcnn.utils import squarify, box_dist, bbs, sample_boxes, best_buddies_assignment
 						
 import trcnn.model as tracker
 from trcnn.model import trackedObject as tob
@@ -26,8 +24,6 @@ import coco
 
 # Import measurement for tracking 
 from measurements import  save_instances
-
-print("Import: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
 def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	'''
@@ -68,7 +64,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 				   'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote',
 				   'keyboard', 'cell phone', 'microwave', 'oven', 'toaster',
 				   'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors',
-				   'teddy bear', 'hair drier', 'toothbrush']
+				   'teddy bear', 'hair drier', 'toothbrush', ' ']
 
 	# Match KITTI class names
 	class_names[class_names.index('person')] = 'Pedestrian'
@@ -101,7 +97,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	f = open(join(pickle_dir, pickles[0]),'rb')
 	r = pickle.load(f)
 		
-	st = datetime.now()			
 	# Compute particle bounding boxes and pyramid levels
 	pyr_levels, bboxes2_batch, split_list, image = sample_boxes(r, image=image)
 
@@ -112,14 +107,10 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	bboxes2_batch = np.array([normalize_boxes(bboxes2_batch, image.shape[:2])])
 
 	# Encode particle boxes
-	st_1  = datetime.now()
 	app2 = roi_model.rois_encode(bboxes2_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
 				r['fp_maps'][2],r['fp_maps'][3])
-	print('enc_time{}'.format(datetime.now()-st_1))
 
 	# vectorize feature roi pooled maps
-	# app1_list = [app1[0,i,:,:,:].flatten('F') for i in range(app1.shape[1])]
-	# app1 = np.array(app1_list)
 	app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
 	app2 = np.array(app2_list)
 
@@ -128,12 +119,10 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	st_i = 1
 	feat_sets = []
 	for i in range(len(split_list)):
-		# feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:], \
-		# 				np.ones(len(app2[st_i:split_list[i]+st_i,:])) ]]#[[[bboxes1, app1], [bboxes2, app2]]]
+
 		feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]/np.linalg.norm(app2[st_i:split_list[i]+st_i,:], axis = 1)[:,None],\
-					np.ones(len(app2[st_i:split_list[i]+st_i,:]))]]#[[[bboxes1, app1], [bboxes2, app2]]]
+					np.ones(len(app2[st_i:split_list[i]+st_i,:]))]]
 		st_i += split_list[i]
-	print("Appearance encoding of particles: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
 	lost_obj = []
 	obj_list = []
@@ -169,10 +158,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		lgf.write("Frame {}\n".format(jj))
 
 		# read frame
-		st = datetime.now() 
 		image = skimage.io.imread(os.path.join(IMAGE_DIR,frame))
-		print("Load Image: {} (hh:mm:ss.ms)".format(datetime.now()-st))
-		st = datetime.now() 
 
 		#######################
 		### PREDICTION STEP ###
@@ -180,8 +166,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# For each object a (2D image) velocity and (2D image)location is computed
 		# Models for motion prediction include Kalman Filtering, Constant velocity
 		# assumption, but can also be modeled with RNNs (TODOs). Here we use the CVA
-		for obj in obj_list:
-			obj.motion_prediction()
+		# for obj in obj_list:
+		# 	obj.motion_prediction()
 		
 		# TODO: Gating
 
@@ -191,9 +177,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		
 		f = open(join(pickle_dir, pickles[jj]),'rb')
 		r = pickle.load(f)
-
-		print("Detections: {} (hh:mm:ss.ms)".format(datetime.now()-st))
-		st = datetime.now() 
 
 		# Compute particle bounding boxes and pyramid levels
 		pyr_levels, bboxes2_batch, split_list, image = sample_boxes(r, image=image)
@@ -205,20 +188,15 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		bboxes2_batch = np.array([normalize_boxes(bboxes2_batch, image.shape[:2])])
 
 		# Encode particle boxes
-		st_1  = datetime.now()
 		app2 = roi_model.rois_encode(bboxes2_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
 					r['fp_maps'][2],r['fp_maps'][3])
-		print('enc_time{}'.format(datetime.now()-st_1))
 
 		# vectorize feature roi pooled maps
-		# app1_list = [app1[0,i,:,:,:].flatten('F') for i in range(app1.shape[1])]
-		# app1 = np.array(app1_list)
 		app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
 		app2 = np.array(app2_list)
 
 		# append features to feature list
 		# st_i = 1 because bboxes2_abs_batch first row is dummy (zero initialization)
-
 		st_i = 1
 		feat_sets = []
 		for i in range(len(split_list)):
@@ -226,11 +204,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 						np.ones(len(app2[st_i:split_list[i]+st_i,:]))]]#[[[bboxes1, app1], [bboxes2, app2]]]
 			st_i += split_list[i]
 
-
-		print("Appearance encoding of particles: {} (hh:mm:ss.ms)".format(datetime.now()-st))
-
-		# print("Appearance encoding: {} (hh:mm:ss.ms)".format(datetime.now()-st))
-		st = datetime.now() 	
 
 		# for each newly found object initialize trackedObject
 		temp_list = []
@@ -242,8 +215,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 							r['class_ids'][i], feat_sets[i], pyr_levels[i])]
 			temp_scores += [r['scores'][i]]
 
-		print("Tracked Object initialization: {} (hh:mm:ss.ms)".format(datetime.now()-st))
-		st = datetime.now()
 
 		##########################
 		#### DATA ASSOCIATION ####
@@ -267,7 +238,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 				# print(buddy_list_i)
 				# print('\n')
 			buddy_list += [buddy_list_i]
-		print(buddy_list)
+		# print(buddy_list)
 		print('\n')
 
 		# pad cost matrix if more old objects than new objects
@@ -297,12 +268,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# # run assignment (motion model)
 		# row_ind, col_ind = linear_sum_assignment(motion_matrix)
 
-		print("Assignment problem solving: {} (hh:mm:ss.ms)".format(datetime.now()-st))
-		st = datetime.now() 	
+		# row_ind_, col_ind_ = best_buddies_assignment(peek_matrix)
 
-		# log assignment
-		print(row_ind)
-		print(col_ind)
 		lgf.write(str(row_ind))
 		lgf.write('\n')
 		lgf.write(str(col_ind))
@@ -311,7 +278,6 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		matching_scores = []
 		for i in row_ind:
 			matching_scores += [peek_matrix[i,col_ind[i]]]
-		print(matching_scores)
 		lgf.write(str(matching_scores))
 		lgf.write('\n')
 
@@ -325,28 +291,29 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		#### UPDATE OBJECTS ####
 		########################
 
-		# match_threshold = 100
+		# match_threshold = 0.9
 		# propagate previous objects in new frame
 		# also save pairs of bounding boxes
-		pairs = []
+		# pairs = []
 		for i in range(num_old):
 			# if there is a match (old>temp)
 			# TODO: treshold matching score
 			j = col_ind[i]
-			if j < num_new: #and peek_matrix[i,col_ind[i]] < match_threshold:
+			if j < num_new :#and peek_matrix[i,col_ind[i]] < match_threshold:
 			# if col_ind[i] < num_new:
 				# refress data
 				obj_list[i].refresh_state(True)
 				obj_list[i].update_motion(temp_list[j].bbox)
 				obj_list[i].mask = temp_list[j].mask
 
-				pairs += [buddy_list[i][j]]
-				# pairs += box_pairs
+
+				# pairs += [buddy_list[i][j]]
 
 				obj_list[i].refress_encoding(temp_list[j].encoding, buddy_list[i][j])
 				obj_list[i].class_name = temp_list[j].class_name
 				temp_matched[j] = True
 				obj_list[i].score = 1 - peek_matrix[i,j]
+				obj_list[i].scores += [[jj, 1 - peek_matrix[i,j]]]
 
 
 			# if there is no match, this object is occluded in this frame (or lost if it 
@@ -354,7 +321,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			else:
 				obj_list[i].refresh_state(False)
 				obj_list[i].update_motion(None)
-		patches += [pairs]
+		# patches += [pairs]
 		# initialize new objects
 		det_thresh = 0.7
 		for i in range(num_new):
@@ -362,6 +329,7 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			if not temp_matched[i] and temp_scores[i] >= det_thresh:
 				temp_list[i].id = track_id
 				temp_list[i].score = temp_scores[i]
+				temp_list[i].scores += [[jj, temp_scores[i]]]
 				track_id += 1
 				obj_list += [temp_list[i]]
 
@@ -370,11 +338,9 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		########################################
 
 		# keep objects appeared in current frame
-		obj_list_fr = [x for x in obj_list if x.tracking_state=='Tracked' or x.tracking_state=='New' or x.tracking_state == 'Occluded']
+		obj_list_fr = [x for x in obj_list if x.tracking_state=='Tracked' or x.tracking_state=='New']
 		num_obj = len(obj_list_fr)
 
-		print("Identity propagation: {} (hh:mm:ss.ms)".format(datetime.now()-st))
-		st = datetime.now() 
 
 		# Prepare object data for saving image
 		boxes = np.empty([num_obj,4])
@@ -388,43 +354,47 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
 		# 				class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
 		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+		save_instances(image, boxes, masks, [-1 for x in obj_list_fr], 
+						class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
+						file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
 		# Use this saving code snippet to show pyramid level for debugging
 		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
 		# 				class_names, ids = ['P_'+str(int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))))))) for x in obj_list_fr], 
 		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
 
-		print("Saving Image: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 		with open(trackf, 'a') as trf:
 			for obj in obj_list:
-				# if obj.tracking_state == 'New' or obj.tracking_state == 'Tracked':
-				if obj.in_frame(image.shape) and obj.smooth_traj and obj._occluded_cnt < 2:
-				# if  obj.smooth_traj and obj._occluded_cnt < 2:
+				if obj.tracking_state == 'New' or obj.tracking_state == 'Tracked':
 					trf.write("{} {} {} 0 0 -10.0 {} {} {} {} -1000.0 -1000.0 -1000.0 -10.0 -1 -1 -1 {}\n".format(
 								jj, obj.id, class_names[obj.class_name], 
 								float(obj.bbox[1]), float(obj.bbox[0]), float(obj.bbox[3]), float(obj.bbox[2]), 1))
 
-		st = datetime.now() 	
 
 		# remove lost objects
 		lost_obj += [x for x in obj_list if x.tracking_state=='Lost']
 		obj_list = [x for x in obj_list if x.tracking_state!='Lost']
 
-	# code for best buddies visualization
-	import cv2
-	for i, patch in zip(range(len(frames)), patches):
-		img1 = skimage.io.imread(os.path.join(IMAGE_DIR,frames[i]))
-		img2 = skimage.io.imread(os.path.join(IMAGE_DIR,frames[i+1]))
-		h,w,_ = img1.shape
-		for p in patch:
-			image = np.concatenate((img1, img2), axis=1)
-			for pair in p:
-				cv2.rectangle(image,tuple([pair[0][1], pair[0][0]]),tuple([pair[0][3],   pair[0][2]]),(0,255,0),1)
-				cv2.rectangle(image,tuple([pair[1][1]+w, pair[1][0]]),tuple([pair[1][3]+w, pair[1][2]]),(0,255,0),1)
-				cv2.line(image, tuple([pair[0][1], pair[0][0] ]), tuple([pair[1][1]+w, pair[1][0]]), (0,255,0), 1)
-			cv2.imshow('im', image)
-			cv2.waitKey(0)
-		if i > 2:
-			break
+	# # code for best buddies visualization
+	# import cv2
+	# for i, patch in zip(range(len(frames)), patches):
+	# 	img1 = skimage.io.imread(os.path.join(IMAGE_DIR,frames[i]))
+	# 	img2 = skimage.io.imread(os.path.join(IMAGE_DIR,frames[i+1]))
+	# 	h,w,_ = img1.shape
+	# 	for p in patch:
+	# 		image = np.concatenate((img1, img2), axis=1)
+	# 		for pair in p:
+	# 			cv2.rectangle(image,tuple([pair[0][1], pair[0][0]]),tuple([pair[0][3],   pair[0][2]]),(0,255,0),1)
+	# 			cv2.rectangle(image,tuple([pair[1][1]+w, pair[1][0]]),tuple([pair[1][3]+w, pair[1][2]]),(0,255,0),1)
+	# 			cv2.line(image, tuple([pair[0][1], pair[0][0] ]), tuple([pair[1][1]+w, pair[1][0]]), (0,255,0), 1)
+	# 		cv2.imshow('im', image)
+	# 		cv2.waitKey(0)
+	# 	if i > 2:
+	# 		break
+
+	# code for saving all tracked objects 
+	# with open('objects.pickle', 'wb') as f:
+	# 	# Pickle the 'data' dictionary using the highest protocol available.
+	# 	pickle.dump(obj_list+lost_obj, f, pickle.HIGHEST_PROTOCOL)
 
 
 	return obj_list
@@ -433,14 +403,15 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 
 if __name__ == '__main__':
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
-	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017s'
+	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
+	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0014s'
 	# input_dir =  '/home/anthony/mbappe'
 	# pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/mbappe'
 	# input_dir = '/home/anthony/nascar/frames'
 	# pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/nascar'
+	from datetime import datetime 
 	st_mot = datetime.now()
-	print([x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)])
+	y = [x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)]
 	print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
 
 

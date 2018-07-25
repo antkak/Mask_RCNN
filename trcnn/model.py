@@ -583,6 +583,7 @@ class trackedObject():
         self.pyramid = pyramid
         self.score = 0
         self.smooth_traj = True
+        self.scores = []
 
     def init_color(self):
         N = 20

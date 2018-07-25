@@ -91,7 +91,7 @@ def batch_cosine_dist(p1,p2):
 	#  https://nyu-cds.github.io/python-numba/05-cuda/
 	'''
 	Compute the pairwise cosine distance of the rows of p1
-	and p2. They are assumed to be normalized.
+	and p2. For non normalized vectors
 	'''
 	l_w = 2
 	p_len  = len(p1[0])
@@ -100,40 +100,22 @@ def batch_cosine_dist(p1,p2):
 	for i in range(p_card):
 		for j in range(p_card):
 			dot = 0
-			# denom_a = 0
-			# denom_b = 0
+			denom_a = 0
+			denom_b = 0
 			for k in range(p_len):
 				dot += p1[i,k]*p2[j,k]
-				# denom_a += p1[i,k]*p1[i,k]
-				# denom_b += p2[j,k]*p2[j,k]
-			# dist_matrix[i,j] = 1 - dot/(np.sqrt(denom_a)*np.sqrt(denom_b))
+				denom_a += p1[i,k]*p1[i,k]
+				denom_b += p2[j,k]*p2[j,k]
+			dist_matrix[i,j] = 1 - dot/(np.sqrt(denom_a)*np.sqrt(denom_b))
 			dist_matrix[i,j] = 1 - dot
 	return dist_matrix
-
-# def cuda_cosine_dist(p1,p2):
-
-# 	p_len  = len(p1[0])
-# 	p_card = len(p1)
-# 	dist_matrix = np.zeros(p_len)
-# 	for i in range(p_card):
-# 		x = tf.constant(np.tile(p1[i], (p_card,1)))
-# 		y = tf.constant(p2)
-# 		s = tf.losses.cosine_distance(tf.nn.l2_normalize(x, 0), tf.nn.l2_normalize(y, 0), axis=0, reduction=tf.losses.Reduction.NONE)
-# 		m = tf.Session().run(s)
-# 		# print(m.shape)
-# 		dist_matrix = np.vstack((dist_matrix, m))
-# 		# print(dist_matrix)
-# 	# print(dist_matrix[1:,:])
-# 	return dist_matrix[1:,:]
-
-
 
 
 def bbs(obj1, obj2):
 	'''
 	A growing in efficiency implementation of best buddies similarity metric
 	returns: bbs metric
-			 bb pairs
+			 bb pairs (boxes)
 	'''
 	particles1 = obj1.encoding[1]
 	boxes1 	   = obj1.encoding[0]
@@ -157,28 +139,12 @@ def bbs(obj1, obj2):
 		indices = np.random.choice(np.array(range(len(particles2))), len(particles1), replace=False) # should introduce probabilities? not sure
 		particles2 = particles2[indices]
 		boxes2 = boxes2[indices]
-
-
-	# print(particles1.shape)
-	# print(boxes1.shape)
-
-	# print(particles2.shape)
-	# print(boxes2.shape)
-	# assert(False)
-
-	# normalize coords dividing with the largest bounding boxes' dimensions (for occlusions) ? TODO?
 	
-	# include spatial distance for faithful bbs
-# `	buddy = batch_cosine_dist(particles1, particles2)
+	# for non normalized vectors
+	# buddy = batch_cosine_dist(particles1, particles2)
+	# for normalized vectors (super fast)
 	buddy = 1 - np.dot(particles1, particles2.T)
-	# buddy = cuda_cosine_dist(particles1, particles2)
-	# print(buddy[0])
-	# l_w = 2
-	# for i in range(len(particles1)):
-	# 	for j in range(len(particles2)):
-	# 		buddy[i,j] = cosine(particles1[i], particles2[j]) #+ l_w*box_dist(boxes1[i], boxes2[j])
 
-	# print(buddy[0])
 	# count buddies
 	# I found a marginally faster way 
 	# and a CUDA one
@@ -199,35 +165,20 @@ def bbs(obj1, obj2):
 			buddy_count += 1
 			buddy_b += [[list(boxes1[i]),list(boxes2[int(index)])]]
 
-	# if particles2 were downsampled, use original indices
-	# buddy_p contains the pairs of indices of matched particles
-	# for examples boxes1[buddy_p[0][0]] and boxes2[buddy_p[1][0]]
-	# are the boxes that match
-	# if l2:
-	# 	buddy_p = [[indices[x[0]], x[1]] for x in buddy_p]
-	# else:
-	# 	buddy_p = [[x[0], indices[x[1]]] for x in buddy_p]
-
-
-	# print(buddy_p)
-	# print(len(buddy_p))
-
 	return buddy_count/min(len(particles1),len(particles2)), buddy_b
 
 def random_sampling(mask, num_points):
+	'''
+	Samples randomly %num_points points (x,y) inside the mask image 
+	'''
 
 	N = np.sum(mask)
 	if num_points > N:
 		num_points = N
-	# try: make all mask indices
-	#	# np.random.choice them	
-	pairs = np.array(list(zip(*np.where(mask == 1))))
-	# print(pairs)
 
-	# ran_pairs = np.random.choice(pairs, size = num_points, replace = False)
+	pairs = np.array(list(zip(*np.where(mask == 1))))
 	point_val = np.random.choice(np.array(list(range(N))), size = num_points, replace = False)
-	# print(point_val)
-	# return _random_sampling(mask,point_val)
+
 	return pairs[point_val]
 
 
@@ -244,7 +195,6 @@ def sample_boxes(r, image=None):
 	bboxes2_batch = np.array([0,0,0,0])
 	split_list = []
 	pyramid_erosion = -1
-	# kernel = np.array([[0,0,1,0,0],[0,1,1,1,0],[1,1,1,1,1],[0,1,1,1,0],[0,0,1,0,0]] ,np.uint8)
 
 	for i in range(len(r['class_ids'])):
 		
@@ -257,7 +207,7 @@ def sample_boxes(r, image=None):
 
 		M1, M2 = pyr_sizes(pyr) 
 		M2 = M2//4
-		# kernel = np.ones((M2,M2))
+
 		kernel = skimage.morphology.diamond(M2//2)
 
 		if pyramid_level > pyramid_erosion:
@@ -266,26 +216,19 @@ def sample_boxes(r, image=None):
 			mask_image = r['masks'][:,:,i]
 
 		# feature pyramid particle constants that correspond to object size
-		# 1: same pyramid
-		# 2: lower pyramid
-
 		N1, N2 = num_particles(mask_image)
 		N2 *= 4
 
 		# visualize particle constants
-		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M1//2, (0,0,255), 1)
 		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M2//2, (0,0,255), 1)
 
 		# sample points inside mask
-		# points1 = random_sampling(mask_image, N1)
 		points2 = random_sampling(mask_image, N2)
 
 		M1 = M1//2
 		M2 = M2//2
 
 		# points to bounding boxes
-		# bboxes1 = np.array([[ point[0]-M1, point[1]-M1, point[0]+M1, point[1]+M1 ] for point in points1]+[[0,0,0,0]])
-		# bboxes1_abs1 = bboxes1.copy() 
 		bboxes2 = np.array([[ point[0]-M2, point[1]-M2, point[0]+M2, point[1]+M2 ] for point in points2])
 		bboxes2_batch = np.vstack((bboxes2_batch,bboxes2))
 		split_list += [N2]
@@ -294,16 +237,64 @@ def sample_boxes(r, image=None):
 	if image is not None:
 		for i in range(bboxes2_batch.shape[0]):
 			cv2.circle(image, ((bboxes2_batch[i,1]+bboxes2_batch[i,3])//2, (bboxes2_batch[i,0]+bboxes2_batch[i,2])//2), 1, (0,0,255), 1)
-	# 	# for i in range(bboxes1.shape[0]):
-	# 	# 	cv2.rectangle(image,tuple([bboxes1[i][1], bboxes1[i][0]]),tuple([bboxes1[i][3], bboxes1[i][2]]),(0,255,0),1)
 		for i in list(np.random.choice(range(bboxes2_batch.shape[0]), 15)):
 			cv2.rectangle(image,tuple([bboxes2_batch[i][1], bboxes2_batch[i][0]]),tuple([bboxes2_batch[i][3], bboxes2_batch[i][2]]),(0,255,0),1)
 
-	# # normalize bboxes
-	# # bboxes1 = np.array([normalize_boxes(bboxes1, image.shape[:2])])
 	# 	cv2.imshow('im', image)
 	# 	cv2.waitKey(0)
 	else:
 		image = None
 
 	return pyr_levels, bboxes2_batch, split_list, image
+
+def best_buddies_assignment(peek_matrix):
+
+	buddies1 = np.zeros((peek_matrix.shape[0]))
+	buddies2 = np.zeros((peek_matrix.shape[1]))
+	for i in range(peek_matrix.shape[0]):
+		buddies1[i] = np.argmin(peek_matrix[i,:])
+	for i in range(peek_matrix.shape[1]):
+		buddies2[i] = np.argmin(peek_matrix[:,i])
+
+	buddy_count = 0
+	row_ind = []
+	col_ind = []
+	rows = list(range(peek_matrix.shape[0]))
+	cols = list(range(peek_matrix.shape[1]))
+	for i in range(peek_matrix.shape[0]):
+		index = buddies1[i]
+		if buddies2[int(index)] == i:
+			buddy_count += 1
+			row_ind += [i]
+			rows.remove(i)
+			col_ind += [int(index)]
+			cols.remove(int(index))
+			# buddy_b += [[list(boxes1[i]),list(boxes2[int(index)])]]	
+
+	print(row_ind)
+	print(col_ind)
+
+
+	if len(rows) > 0:
+
+		# get cost submatrix
+		peek_matrix2 = peek_matrix[np.array(rows)[:,None],cols]
+		print(peek_matrix2)
+		# print(peek_matrix2)
+
+		# solve the lin sum assignment
+		if peek_matrix2.shape[0]==1:
+			row_ind += [rows[0]]
+			col_ind += [cols[np.argmin(peek_matrix2)]]
+		else:
+			row_left, col_left = linear_sum_assignment(peek_matrix2)
+			row_ind += [rows[i] for i in row_left]
+			col_ind += [cols[i] for i in col_left]
+
+	row_ind = np.array(row_ind)
+	col_ind = np.array(col_ind)
+	inds = row_ind.argsort()
+	row_ind = list(row_ind[inds])
+	col_ind = list(col_ind[inds])
+
+	return row_ind, col_ind
