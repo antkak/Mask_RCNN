@@ -12,6 +12,9 @@ import mrcnn.model as modellib
 from mrcnn.model import *
 import colorsys
 import random
+import filterpy.kalman as kl
+from scipy.spatial.distance import mahalanobis
+
 
 # TrackRCNN adds functionality to MaskRCNN for tracking 
 def IoU(boxA, boxB):
@@ -565,6 +568,20 @@ class PyramidROIAlign(KE.Layer):
     def compute_output_shape(self, input_shape):
         return input_shape[0][:2] + self.pool_shape + (input_shape[2][-1], )
 
+
+
+def box_center(bbox):
+  """
+  Takes a bounding box in the form [x1,y1,x2,y2] and returns z in the form
+    [x,y,s,r] where x,y is the centre of the box and s is the scale/area and r is
+    the aspect ratio
+  """
+  h = bbox[2]-bbox[0]
+  w = bbox[3]-bbox[1]
+  y = bbox[0]+h/2.
+  x = bbox[1]+w/2.
+  return np.array([x,y]).reshape((2,1)) 
+
 class trackedObject():
 
     def __init__(self, ID, mask, bbox, class_name, encodings, pyramid, color = None):
@@ -577,13 +594,25 @@ class trackedObject():
         self.encoding = encodings
         self.color = color if color is not None else self.init_color()
         self._occluded_cnt = 0
-        self.bbox_pred = bbox           # predicted bbox in next frame
-        self.v_pred = [0,0]             # predicted velocity in next frame
-        self.v = [0,0]                  # current velocity
+        # self.bbox_pred = bbox           # predicted bbox in next frame
+        # self.v_pred = [0,0]             # predicted velocity in next frame
+        # self.v = [0,0]                  # current velocity
         self.pyramid = pyramid
         self.score = 0
         self.smooth_traj = True
         self.scores = []
+        self.dim_x = 4
+        self.dim_o = 2
+        self.F = np.array([[1,0,1,0],[0,1,0,1],[0,0,1,0],[0,0,0,1]])
+        self.H = np.array([[1,0,0,0],[0,1,0,0]])
+        self.R = np.diag([100,100])
+        self.P = np.diag([10,10,1000,1000])
+        self.Q = np.diag([1,1,10,10])
+        self.x = np.array([0,0,0,0]).reshape((4,1))
+        self.x_minus = np.array([0,0,0,0]).reshape((4,1))
+        self.x[:2] = box_center(self.bbox)
+        self.x_minus[:2] = box_center(self.bbox)
+        self.P_minus = np.diag([10,10,1000,1000])
 
     def init_color(self):
         N = 20
@@ -600,6 +629,26 @@ class trackedObject():
         if self.bbox[1] > shape[1] or self.bbox[3] > shape[1]:
             return False
         return True
+
+    def location_prediction(self):
+        self.x_minus, self.P_minus = kl.predict(self.x, self.P, self.F, self.Q)
+
+    def location_update(self, x, P, z, R = None):
+        # if there is a detection 
+        if z is not None:
+            # use exact bounding box, refress uncertainty
+            self.bbox = z
+            self.x[:2] = box_center(z)
+            x_obs, self.P = kl.update(x, P, box_center(z), self.R, self.H)
+            self.x[2:] = x_obs[2:]
+        # if there is no detection 
+        else:
+            # use predicted bounding box center and uncertainty
+            delta_x = self.x_minus - self.x
+            self.bbox = [self.bbox[0]+delta_x[1], self.bbox[1]+delta_x[0], 
+                         self.bbox[2]+delta_x[1], self.bbox[3]+delta_x[0]]
+            self.x = self.x_minus
+            self.P = self.P_minus
 
     def refresh_state(self, matched):
 
@@ -623,8 +672,11 @@ class trackedObject():
                 if self._occluded_cnt > 5: # Frames being occluded
                     self.tracking_state = 'Lost'
 
+
+
     def refress_encoding(self, particles, buddy_list):
 
+        np.random.seed(1)
         c_old = 0.8
         # c_bb = 1
         # print(buddy_list)
@@ -658,55 +710,55 @@ class trackedObject():
         #     print('obj {}'.format(self.encoding))
 
 
-    def motion_prediction(self):
+    # def motion_prediction(self):
 
-        self.v_pred = self.vel_predict()
-        self.bbox_pred = self.bbox_predict() 
-        return self.v_pred, self.bbox_pred
+    #     self.v_pred = self.vel_predict()
+    #     self.bbox_pred = self.bbox_predict() 
+    #     return self.v_pred, self.bbox_pred
 
-    def update_motion(self, bbox_obs):
+    # def update_motion(self, bbox_obs):
 
-        assert(self.tracking_state != 'New')
+    #     assert(self.tracking_state != 'New')
 
-        if self.tracking_state == 'Tracked':
-            assert(bbox_obs is not None)
-            self.v = self.compute_vel(bbox_obs)
-            self.bbox = bbox_obs 
-            if IoU(self.bbox, self.bbox_pred) > 0.5:
-                self.smooth_traj = True 
-            else:
-                self.smooth_traj = False
-        elif self.tracking_state == 'Occluded':
-            assert(bbox_obs is None)
-            self.v = self.v_pred
-            if IoU(self.bbox, self.bbox_pred) > 0.5:
-                self.smooth_traj = True 
-            else:
-                self.smooth_traj = False
-            self.bbox = self.bbox_pred
-        else:
-            # Lost, Do nothing really
-            None
+    #     if self.tracking_state == 'Tracked':
+    #         assert(bbox_obs is not None)
+    #         self.v = self.compute_vel(bbox_obs)
+    #         self.bbox = bbox_obs 
+    #         if IoU(self.bbox, self.bbox_pred) > 0.5:
+    #             self.smooth_traj = True 
+    #         else:
+    #             self.smooth_traj = False
+    #     elif self.tracking_state == 'Occluded':
+    #         assert(bbox_obs is None)
+    #         self.v = self.v_pred
+    #         if IoU(self.bbox, self.bbox_pred) > 0.5:
+    #             self.smooth_traj = True 
+    #         else:
+    #             self.smooth_traj = False
+    #         self.bbox = self.bbox_pred
+    #     else:
+    #         # Lost, Do nothing really
+    #         None
 
-    def vel_predict(self,mode='const'):
-        # classic constant velocity model
-        if mode == 'const':
-            return self.v
-        # elif mode == 'rnn':
-        #     return self.rnn_model.predict(self.v)
-        else:
-            assert(self,mode=='const')
+    # def vel_predict(self,mode='const'):
+    #     # classic constant velocity model
+    #     if mode == 'const':
+    #         return self.v
+    #     # elif mode == 'rnn':
+    #     #     return self.rnn_model.predict(self.v)
+    #     else:
+    #         assert(self,mode=='const')
 
-    def bbox_predict(self):
-        # y x y x
-        # x y 
-        return [self.v_pred[1] + self.bbox[0],
-                self.v_pred[0] + self.bbox[1],
-                self.v_pred[1] + self.bbox[2],
-                self.v_pred[0] + self.bbox[3]]
+    # def bbox_predict(self):
+    #     # y x y x
+    #     # x y 
+    #     return [self.v_pred[1] + self.bbox[0],
+    #             self.v_pred[0] + self.bbox[1],
+    #             self.v_pred[1] + self.bbox[2],
+    #             self.v_pred[0] + self.bbox[3]]
 
-    def compute_vel(self,bbox_obs, mode = 'upper'):
-        # TODO: implement Nearest corner
-        return [bbox_obs[1] - self.bbox[1],
-                bbox_obs[0] - self.bbox[0]]    
+    # def compute_vel(self,bbox_obs, mode = 'upper'):
+    #     # TODO: implement Nearest corner
+    #     return [bbox_obs[1] - self.bbox[1],
+    #             bbox_obs[0] - self.bbox[0]]    
 

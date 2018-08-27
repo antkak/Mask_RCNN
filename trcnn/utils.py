@@ -2,7 +2,32 @@ import numpy as np
 from numba import jit
 import cv2
 import skimage
+from scipy.spatial.distance import mahalanobis
+np.random.seed(1)
+import scipy.stats as st
 
+def gkern(kernlen=21, nsig=3):
+    """Returns a 2D Gaussian kernel array."""
+
+    interval = (2*nsig+1.)/(kernlen)
+    x = np.linspace(-nsig-interval/2., nsig+interval/2., kernlen+1)
+    kern1d = np.diff(st.norm.cdf(x))
+    kernel_raw = np.sqrt(np.outer(kern1d, kern1d))
+    kernel = kernel_raw/kernel_raw.sum()
+    return kernel
+
+
+def gating(x_1, P_1, x_2, s = 3):
+    lambda_, v = np.linalg.eig(P_1[:2,:2])
+    lambda_ = np.sqrt(lambda_)
+    ll_p   = (s*lambda_[0])**2*np.linalg.multi_dot([v[0].T, np.linalg.inv(P_1[:2,:2]), v[0]])
+    ll_x_2 = mahalanobis(x_2[:2],x_1[:2],np.linalg.inv(P_1[:2,:2]))**2
+    print(ll_p)
+    print(ll_x_2)
+    if ll_x_2 >= ll_p:
+        return True
+    else:
+        return False
 
 def squarify(M,val):
 	'''
@@ -25,7 +50,8 @@ def keepClasses(r, classes, class_names):
 	class_indices = [class_names.index(c) for c in classes]
 
 	# Get all indices of relevant classes
-	ri = [ i for i in range(len(r['class_ids'])) if (r['class_ids'][i] in class_indices and r['rois'][i,:][2]-r['rois'][i,:][0] >= 25 )]
+	ri = [ i for i in range(len(r['class_ids'])) if (r['class_ids'][i] in class_indices and \
+			r['rois'][i,:][2]-r['rois'][i,:][0] >= 25 )]
 	# ri = [ i for i in range(len(r['class_ids'])) if r['class_ids'][i] in class_indices]
 
 	# Sample results (r) that match relevant indices

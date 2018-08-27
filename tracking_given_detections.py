@@ -5,14 +5,17 @@ from os import listdir
 import uuid
 import numpy as np
 import pickle
+import matplotlib.patches as patches
+from matplotlib.patches import Ellipse
 
 from scipy.optimize import linear_sum_assignment
+from matplotlib import pyplot as plt
 
 ROOT_DIR = os.path.abspath("./")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from trcnn.utils import squarify, box_dist, bbs, sample_boxes, best_buddies_assignment
+from trcnn.utils import squarify, box_dist, bbs, sample_boxes, best_buddies_assignment, gating, gkern
 						
 import trcnn.model as tracker
 from trcnn.model import trackedObject as tob
@@ -70,14 +73,13 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	class_names[class_names.index('person')] = 'Pedestrian'
 	class_names[class_names.index('car')]    = 'Car'
 
-	class InferenceConfig(coco.CocoConfig):
-		# Set batch size to 1 since we'll be running inference on
-		# one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
+	class EncoderConfig(coco.CocoConfig):
+		# Configuration for bounding box encoding
 		POOL_SIZE = 5
 		GPU_COUNT = 1
 		IMAGES_PER_GPU = 1
 
-	config = InferenceConfig()
+	config = EncoderConfig()
 
 	# Read frame names from folder
 	IMAGE_DIR = input_dir
@@ -98,31 +100,45 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	r = pickle.load(f)
 		
 	# Compute particle bounding boxes and pyramid levels
-	pyr_levels, bboxes2_batch, split_list, image = sample_boxes(r, image=image)
+	pyr_levels, bboxes_batch, split_list, image = sample_boxes(r, image=image)
 
 	# Keep a copy of absolute coordinates
-	bboxes2_abs_batch = bboxes2_batch.copy()
+	bboxes_abs_batch = bboxes_batch.copy()
 
 	# Normalize coordinates for encoding
-	bboxes2_batch = np.array([normalize_boxes(bboxes2_batch, image.shape[:2])])
+	bboxes_batch = np.array([normalize_boxes(bboxes_batch, image.shape[:2])])
+
+	# Create normalization
+	sigma = config.POOL_SIZE/2.0/3.0
+	kerlen = config.POOL_SIZE
+	W = gkern(kernlen=kerlen, nsig=sigma)
+	w = np.stack([W for i in range(256)]).T.flatten('F')
+	print(W.shape)
+	print(w.shape)
+	kernel = False
 
 	# Encode particle boxes
-	app2 = roi_model.rois_encode(bboxes2_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+	app = roi_model.rois_encode(bboxes_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
 				r['fp_maps'][2],r['fp_maps'][3])
 
-	# vectorize feature roi pooled maps
-	app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
-	app2 = np.array(app2_list)
+	if kernel:
+		app_list = [np.multiply(app[0,i,:,:,:].flatten('F'),w) for i in range(app.shape[1])]
+	else: 
+		app_list = [app[0,i,:,:,:].flatten('F') for i in range(app.shape[1])]
+
+	app = np.array(app_list)
+	# vectorize feature roi pooled map	app = np.array(app_list)
 
 	# append features to feature list
-	# st_i = 1 because bboxes2_abs_batch first row is dummy (zero initialization)
+	# st_i = 1 because bboxes_abs_batch first row is dummy (zero initialization)
 	st_i = 1
 	feat_sets = []
-	for i in range(len(split_list)):
+	for split in split_list:
 
-		feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]/np.linalg.norm(app2[st_i:split_list[i]+st_i,:], axis = 1)[:,None],\
-					np.ones(len(app2[st_i:split_list[i]+st_i,:]))]]
-		st_i += split_list[i]
+		feat_sets += [[bboxes_abs_batch[st_i:split+st_i,:], \
+				app[st_i:split+st_i,:]/np.linalg.norm(app[st_i:split+st_i,:], axis = 1)[:,None],\
+				np.ones(len(app[st_i:split+st_i,:]))]]
+		st_i += split
 
 	lost_obj = []
 	obj_list = []
@@ -160,49 +176,60 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# read frame
 		image = skimage.io.imread(os.path.join(IMAGE_DIR,frame))
 
-		#######################
-		### PREDICTION STEP ###
-		#######################
-		# For each object a (2D image) velocity and (2D image)location is computed
-		# Models for motion prediction include Kalman Filtering, Constant velocity
-		# assumption, but can also be modeled with RNNs (TODOs). Here we use the CVA
-		# for obj in obj_list:
-		# 	obj.motion_prediction()
-		
-		# TODO: Gating
+		# Prediction Step	
+		for obj in obj_list:
+			obj.location_prediction()
 
-		#########################################
-		#### DETECTION & NEW OBJECT ENCODING ####
-		#########################################
+		# plot uncertainties
+		fig = plt.figure() 
+		ax1 = fig.add_subplot(111, aspect='equal')
+		ax1.imshow(image)
+		for obj in obj_list:
+			x = obj.x_minus
+			P = obj.P_minus
+			lambda_, v = np.linalg.eig(P[:2,:2])
+			lambda_ = np.sqrt(lambda_)
+			j = 3
+			ell = Ellipse(xy=(x[0], x[1]),
+				width=lambda_[0]*j*2, height=lambda_[1]*j*2,
+				angle=np.rad2deg(np.arccos(v[0, 0])), fill=False,lw=3)
+			ell.set_facecolor('none')
+			ax1.add_patch(ell)
+		
+		# Detections and encoding
 		
 		f = open(join(pickle_dir, pickles[jj]),'rb')
 		r = pickle.load(f)
 
 		# Compute particle bounding boxes and pyramid levels
-		pyr_levels, bboxes2_batch, split_list, image = sample_boxes(r, image=image)
+		pyr_levels, bboxes_batch, split_list, image = sample_boxes(r, image=image)
 
 		# Keep a copy of absolute coordinates
-		bboxes2_abs_batch = bboxes2_batch.copy()
+		bboxes_abs_batch = bboxes_batch.copy()
 
 		# Normalize coordinates for encoding
-		bboxes2_batch = np.array([normalize_boxes(bboxes2_batch, image.shape[:2])])
+		bboxes_batch = np.array([normalize_boxes(bboxes_batch, image.shape[:2])])
 
 		# Encode particle boxes
-		app2 = roi_model.rois_encode(bboxes2_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+		app = roi_model.rois_encode(bboxes_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
 					r['fp_maps'][2],r['fp_maps'][3])
 
 		# vectorize feature roi pooled maps
-		app2_list = [app2[0,i,:,:,:].flatten('F') for i in range(app2.shape[1])]
-		app2 = np.array(app2_list)
+		if kernel:
+			app_list = [np.multiply(app[0,i,:,:,:].flatten('F'),w) for i in range(app.shape[1])]
+		else: 
+			app_list = [app[0,i,:,:,:].flatten('F') for i in range(app.shape[1])]
+		app = np.array(app_list)
 
 		# append features to feature list
-		# st_i = 1 because bboxes2_abs_batch first row is dummy (zero initialization)
+		# st_i = 1 because bboxes_abs_batch first row is dummy (zero initialization)
 		st_i = 1
 		feat_sets = []
-		for i in range(len(split_list)):
-			feat_sets += [[bboxes2_abs_batch[st_i:split_list[i]+st_i,:], app2[st_i:split_list[i]+st_i,:]/np.linalg.norm(app2[st_i:split_list[i]+st_i,:], axis = 1)[:,None],\
-						np.ones(len(app2[st_i:split_list[i]+st_i,:]))]]#[[[bboxes1, app1], [bboxes2, app2]]]
-			st_i += split_list[i]
+		for split in split_list:
+			feat_sets += [[bboxes_abs_batch[st_i:split+st_i,:], \
+					app[st_i:split+st_i,:]/np.linalg.norm(app[st_i:split+st_i,:], axis = 1)[:,None],\
+					np.ones(len(app[st_i:split+st_i,:]))]]#[[[bboxes1, app1], [bboxes2, app]]]
+			st_i += split
 
 
 		# for each newly found object initialize trackedObject
@@ -225,67 +252,40 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# Compare old and new objects' appearance 
 		buddy_list = []
 		peek_matrix = np.zeros((len(obj_list),len(temp_list)))
-		for i in range(len(obj_list)):
+		for i,obj in enumerate(obj_list):
 			buddy_list_i = []
-			for j in range(len(temp_list)):
-				# peek_matrix[i,j] = simple_dist(obj_list[i],temp_list[j])
-				# if np.abs(obj_list[i].pyramid - temp_list[j].pyramid) > 2:
-				# 	peek_matrix[i,j] = 100
-				# else:
-				bb_sim, bb_b = bbs(obj_list[i],temp_list[j])
+			for j,temp in enumerate(temp_list):
+
+				bb_sim, bb_b = bbs(obj,temp)
 				peek_matrix[i,j] = 1-bb_sim
 				buddy_list_i += [bb_b]
-				# print(buddy_list_i)
-				# print('\n')
+				# if gating(obj.x_minus, obj.P_minus, temp.x):
+				# 	peek_matrix[i,j] = 100
 			buddy_list += [buddy_list_i]
-		# print(buddy_list)
-		print('\n')
+
+		fig.canvas.flush_events()
+		plt.draw()
+		plt.savefig('_'+str(jj)+'.png')
+		# plt.show()
+		ax1.cla()
 
 		# pad cost matrix if more old objects than new objects
 		if peek_matrix.shape[0] > peek_matrix.shape[1]:
 			peek_matrix = squarify(peek_matrix, 100)
 
-		print(peek_matrix)
-		lgf.write(str(peek_matrix))
-		lgf.write('\n')
-
-		#assert(False)
-		# # MOTION CONGRUENCE #
-		# # Compare new objects' bounding boxes location to
-		# # old objects' predicted bounding boxes location
-		# motion_matrix = np.zeros((len(obj_list),len(temp_list)))
-		# for i in range(len(obj_list)):
-		# 	for j in range(len(temp_list)):
-		# 		motion_matrix[i,j] = box_dist(obj_list[i].bbox_pred, temp_list[j].bbox)
-		# print(motion_matrix)
-
-		# # pad cost matrix if more old objects than new objects
-		# if motion_matrix.shape[0] > motion_matrix.shape[1]:
-		# 	motion_matrix = squarify(motion_matrix, 100)
+		print('\n'+str(peek_matrix))
 
 		# run assignment (appearance model)
 		row_ind, col_ind = linear_sum_assignment(peek_matrix)
-		# # run assignment (motion model)
-		# row_ind, col_ind = linear_sum_assignment(motion_matrix)
-
-		# row_ind_, col_ind_ = best_buddies_assignment(peek_matrix)
-
-		lgf.write(str(row_ind))
-		lgf.write('\n')
-		lgf.write(str(col_ind))
-		lgf.write('\n')
 
 		matching_scores = []
 		for i in row_ind:
 			matching_scores += [peek_matrix[i,col_ind[i]]]
-		lgf.write(str(matching_scores))
-		lgf.write('\n')
-
+		lgf.write(str(peek_matrix)+'\n'+str(row_ind)+'\n'+str(col_ind)+'\n'+str(matching_scores)+'\n')
 
 		num_old = len(obj_list)
 		num_new = len(temp_list)
 		temp_matched = [False]*num_new
-		# print(temp_matched)
 
 		########################
 		#### UPDATE OBJECTS ####
@@ -295,43 +295,42 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# propagate previous objects in new frame
 		# also save pairs of bounding boxes
 		# pairs = []
-		for i in range(num_old):
-			# if there is a match (old>temp)
-			# TODO: treshold matching score
+		for i,obj in enumerate(obj_list):
 			j = col_ind[i]
+			# if there is a match (old>temp)
 			if j < num_new :#and peek_matrix[i,col_ind[i]] < match_threshold:
-			# if col_ind[i] < num_new:
 				# refress data
-				obj_list[i].refresh_state(True)
-				obj_list[i].update_motion(temp_list[j].bbox)
-				obj_list[i].mask = temp_list[j].mask
-
+				obj.refresh_state(True)
+				obj.mask = temp_list[j].mask
 
 				# pairs += [buddy_list[i][j]]
 
-				obj_list[i].refress_encoding(temp_list[j].encoding, buddy_list[i][j])
-				obj_list[i].class_name = temp_list[j].class_name
+				obj.refress_encoding(temp_list[j].encoding, buddy_list[i][j])
+				obj.class_name = temp_list[j].class_name
 				temp_matched[j] = True
-				obj_list[i].score = 1 - peek_matrix[i,j]
-				obj_list[i].scores += [[jj, 1 - peek_matrix[i,j]]]
+				obj.score = 1 - peek_matrix[i,j]
+				obj.scores += [[jj, 1 - peek_matrix[i,j]]]
+				obj.location_update(obj.x_minus, obj.P_minus, temp_list[j].bbox )
 
 
 			# if there is no match, this object is occluded in this frame (or lost if it 
 			# is occluded for more than N frames)
 			else:
-				obj_list[i].refresh_state(False)
-				obj_list[i].update_motion(None)
+				obj.refresh_state(False)
+				obj.location_update(obj.x_minus, obj.P_minus, None )
+
+
 		# patches += [pairs]
 		# initialize new objects
 		det_thresh = 0.7
-		for i in range(num_new):
+		for i, temp in enumerate(temp_list):
 			# for new object initialization the detection score should be >= det_thresh
 			if not temp_matched[i] and temp_scores[i] >= det_thresh:
-				temp_list[i].id = track_id
-				temp_list[i].score = temp_scores[i]
-				temp_list[i].scores += [[jj, temp_scores[i]]]
+				temp.id = track_id
+				temp.score = temp_scores[i]
+				temp.scores += [[jj, temp_scores[i]]]
 				track_id += 1
-				obj_list += [temp_list[i]]
+				obj_list += [temp]
 
 		########################################
 		### SAVING RESULTS FOR CURRENT FRAME ###
@@ -341,22 +340,20 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		obj_list_fr = [x for x in obj_list if x.tracking_state=='Tracked' or x.tracking_state=='New']
 		num_obj = len(obj_list_fr)
 
-
 		# Prepare object data for saving image
 		boxes = np.empty([num_obj,4])
 		masks = np.empty([image.shape[0], image.shape[1], num_obj])
 		for i in range(num_obj):
-			# boxes[i,:] = obj_list_fr[i].bbox_pred
 			boxes[i,:] = obj_list_fr[i].bbox
 			masks[:,:,i] = obj_list_fr[i].mask
 
 		# save current frame with found objects
-		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
-		# 				class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
-		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
-		save_instances(image, boxes, masks, [-1 for x in obj_list_fr], 
-						class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
+		save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
+						class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
 						file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+		# save_instances(image, boxes, masks, [-1 for x in obj_list_fr], 
+		# 				class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
+		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
 		# Use this saving code snippet to show pyramid level for debugging
 		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
 		# 				class_names, ids = ['P_'+str(int(np.floor(4+np.log2(1/224*np.sqrt(np.abs((x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))))))) for x in obj_list_fr], 
@@ -373,6 +370,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		# remove lost objects
 		lost_obj += [x for x in obj_list if x.tracking_state=='Lost']
 		obj_list = [x for x in obj_list if x.tracking_state!='Lost']
+
+
 
 	# # code for best buddies visualization
 	# import cv2
@@ -403,8 +402,8 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 
 if __name__ == '__main__':
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
-	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0014s'
+	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
+	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017s'
 	# input_dir =  '/home/anthony/mbappe'
 	# pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/mbappe'
 	# input_dir = '/home/anthony/nascar/frames'
