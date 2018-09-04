@@ -246,6 +246,8 @@ class TrackRCNN(modellib.MaskRCNN):
                 config=config)([tracking_anchors])
             rpn_rois = KL.Concatenate(axis = 1)([rpn_rois, track_rois])
 
+            print(rpn_rois)
+
 
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
                 fpn_classifier_graph(rpn_rois, mrcnn_feature_maps, input_image_meta,
@@ -360,7 +362,6 @@ def normalize_boxes(boxes, imshape):
         boxes = np.divide(boxes, width-1)
     return boxes
 
-
 class TrackRoisLayer(KE.Layer):
     """Preprocess tracking anchors
 
@@ -461,6 +462,239 @@ class RoiAppearance():
 
         pools = self.keras_model.predict([rois, meta, f2, f3, f4, f5])
         return pools
+
+class MaskrcnnHeads():
+
+    def __init__(self, config):
+        self.config = config
+        self.keras_model = self.build(config=config)
+    def build(self,config):
+
+        '''ROIS SHOULD BE NORMALIZED!!!'''
+        input_rois = KL.Input(
+             shape=[100 ,4], name="input_rois")
+        input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
+                                    name="input_image_meta")
+        input_feat_2 = KL.Input(shape=[  256, 256, 256], 
+            name='input_P2')
+        input_feat_3 = KL.Input(shape=[  128, 128, 256], 
+            name='input_P3')
+        input_feat_4 = KL.Input(shape=[   64,  64, 256], 
+            name='input_P4')
+        input_feat_5 = KL.Input(shape=[   32,  32, 256], 
+            name='input_P5')
+
+        mrcnn_feature_maps = [input_feat_2, input_feat_3, input_feat_4, input_feat_5]
+
+        print(input_rois)
+
+        mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
+            fpn_classifier_graph(input_rois, mrcnn_feature_maps, input_image_meta,
+                                 config.POOL_SIZE, config.NUM_CLASSES,
+                                 train_bn=config.TRAIN_BN,
+                                 fc_layers_size=config.FPN_CLASSIF_FC_LAYERS_SIZE)
+
+        
+
+        # Detections
+        # output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in 
+        # normalized coordinates
+        detections = DetectionLayer(config, name="mrcnn_detection")(
+            [input_rois, mrcnn_class, mrcnn_bbox, input_image_meta])
+        # Create masks for detections
+        detection_boxes = KL.Lambda(lambda x: x[..., :4])(detections)
+        mrcnn_mask = build_fpn_mask_graph(detection_boxes, mrcnn_feature_maps,
+                                          input_image_meta,
+                                          config.MASK_POOL_SIZE,
+                                          config.NUM_CLASSES,
+                                          train_bn=config.TRAIN_BN)
+
+        model = KM.Model([input_rois, input_image_meta,
+                            input_feat_2, input_feat_3, input_feat_4, input_feat_5],
+                         [detections, mrcnn_class, mrcnn_bbox, mrcnn_mask],
+                         name='mask_rcnn')
+
+        return model
+
+    # [x]
+    def masked(self, images, config, rois, feature_maps, imshape):
+
+
+        molded_images, image_metas, windows = self.mold_inputs(images)
+
+        rois = normalize_boxes(rois, imshape)
+
+        rois = np.expand_dims(rois, axis=0)
+
+
+        # Run object detection
+        detections, _, _, mrcnn_mask = self.keras_model.predict([rois, image_metas, 
+                feature_maps[0], feature_maps[1], feature_maps[2], feature_maps[3]], verbose=0)
+
+        # Process detections
+        results = []
+        for i, image in enumerate(images):
+            final_rois, final_class_ids, final_scores, final_masks =\
+                self.unmold_detections(detections[i], mrcnn_mask[i],
+                                       image.shape, molded_images[i].shape,
+                                       windows[i])
+            results.append({
+                "rois": final_rois,
+                "class_ids": final_class_ids,
+                "scores": final_scores,
+                "masks": final_masks,
+                "metas": image_metas,
+                "images": molded_images,
+                "detections": detections
+            })
+        return results
+
+    def load_weights(self, filepath, by_name=False, exclude=None):
+        """Modified version of the correspoding Keras function with
+        the addition of multi-GPU support and the ability to exclude
+        some layers from loading.
+        exlude: list of layer names to excluce
+        """
+        import h5py
+        from keras.engine import topology
+
+        if exclude:
+            by_name = True
+
+        if h5py is None:
+            raise ImportError('`load_weights` requires h5py.')
+        f = h5py.File(filepath, mode='r')
+        if 'layer_names' not in f.attrs and 'model_weights' in f:
+            f = f['model_weights']
+
+        # In multi-GPU training, we wrap the model. Get layers
+        # of the inner model because they have the weights.
+        keras_model = self.keras_model
+        layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model")\
+            else keras_model.layers
+
+        # Exclude some layers
+        if exclude:
+            layers = filter(lambda l: l.name not in exclude, layers)
+
+        if by_name:
+            topology.load_weights_from_hdf5_group_by_name(f, layers)
+        else:
+            topology.load_weights_from_hdf5_group(f, layers)
+        if hasattr(f, 'close'):
+            f.close()
+
+        # Update the log directory
+        # self.set_log_dir(filepath)
+
+    def mold_inputs(self, images):
+        """Takes a list of images and modifies them to the format expected
+        as an input to the neural network.
+        images: List of image matricies [height,width,depth]. Images can have
+            different sizes.
+
+        Returns 3 Numpy matricies:
+        molded_images: [N, h, w, 3]. Images resized and normalized.
+        image_metas: [N, length of meta data]. Details about each image.
+        windows: [N, (y1, x1, y2, x2)]. The portion of the image that has the
+            original image (padding excluded).
+        """
+        molded_images = []
+        image_metas = []
+        windows = []
+        for image in images:
+            # Resize image
+            # TODO: move resizing to mold_image()
+            molded_image, window, scale, padding, crop = utils.resize_image(
+                image,
+                min_dim=self.config.IMAGE_MIN_DIM,
+                min_scale=self.config.IMAGE_MIN_SCALE,
+                max_dim=self.config.IMAGE_MAX_DIM,
+                mode=self.config.IMAGE_RESIZE_MODE)
+            molded_image = mold_image(molded_image, self.config)
+            # Build image_meta
+            image_meta = compose_image_meta(
+                0, image.shape, molded_image.shape, window, scale,
+                np.zeros([self.config.NUM_CLASSES], dtype=np.int32))
+            # Append
+            molded_images.append(molded_image)
+            windows.append(window)
+            image_metas.append(image_meta)
+        # Pack into arrays
+        molded_images = np.stack(molded_images)
+        image_metas = np.stack(image_metas)
+        windows = np.stack(windows)
+        return molded_images, image_metas, windows
+
+    def unmold_detections(self, detections, mrcnn_mask, original_image_shape,
+                          image_shape, window):
+        """Reformats the detections of one image from the format of the neural
+        network output to a format suitable for use in the rest of the
+        application.
+
+        detections: [N, (y1, x1, y2, x2, class_id, score)] in normalized coordinates
+        mrcnn_mask: [N, height, width, num_classes]
+        original_image_shape: [H, W, C] Original image shape before resizing
+        image_shape: [H, W, C] Shape of the image after resizing and padding
+        window: [y1, x1, y2, x2] Pixel coordinates of box in the image where the real
+                image is excluding the padding.
+
+        Returns:
+        boxes: [N, (y1, x1, y2, x2)] Bounding boxes in pixels
+        class_ids: [N] Integer class IDs for each bounding box
+        scores: [N] Float probability scores of the class_id
+        masks: [height, width, num_instances] Instance masks
+        """
+        # How many detections do we have?
+        # Detections array is padded with zeros. Find the first class_id == 0.
+        zero_ix = np.where(detections[:, 4] == 0)[0]
+        N = zero_ix[0] if zero_ix.shape[0] > 0 else detections.shape[0]
+
+        # Extract boxes, class_ids, scores, and class-specific masks
+        boxes = detections[:N, :4]
+        class_ids = detections[:N, 4].astype(np.int32)
+        scores = detections[:N, 5]
+        masks = mrcnn_mask[np.arange(N), :, :, class_ids]
+
+        # Translate normalized coordinates in the resized image to pixel
+        # coordinates in the original image before resizing
+        window = utils.norm_boxes(window, image_shape[:2])
+        wy1, wx1, wy2, wx2 = window
+        shift = np.array([wy1, wx1, wy1, wx1])
+        wh = wy2 - wy1  # window height
+        ww = wx2 - wx1  # window width
+        scale = np.array([wh, ww, wh, ww])
+        # Convert boxes to normalized coordinates on the window
+        boxes = np.divide(boxes - shift, scale)
+        # Convert boxes to pixel coordinates on the original image
+        boxes = utils.denorm_boxes(boxes, original_image_shape[:2])
+
+        # Filter out detections with zero area. Happens in early training when
+        # network weights are still random
+        exclude_ix = np.where(
+            (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) <= 0)[0]
+        if exclude_ix.shape[0] > 0:
+            boxes = np.delete(boxes, exclude_ix, axis=0)
+            class_ids = np.delete(class_ids, exclude_ix, axis=0)
+            scores = np.delete(scores, exclude_ix, axis=0)
+            masks = np.delete(masks, exclude_ix, axis=0)
+            N = class_ids.shape[0]
+
+        # Resize masks to original image size and set boundary threshold.
+        full_masks = []
+        for i in range(N):
+            # Convert neural network mask to full size mask
+            full_mask = utils.unmold_mask(masks[i], boxes[i], original_image_shape)
+            full_masks.append(full_mask)
+        full_masks = np.stack(full_masks, axis=-1)\
+            if full_masks else np.empty(original_image_shape[:2] + (0,))
+
+        return boxes, class_ids, scores, full_masks
+
+
+
+
+
 
 class PyramidROIAlign(KE.Layer):
     """Implements ROI Pooling on multiple levels of the feature pyramid.
@@ -594,9 +828,6 @@ class trackedObject():
         self.encoding = encodings
         self.color = color if color is not None else self.init_color()
         self._occluded_cnt = 0
-        # self.bbox_pred = bbox           # predicted bbox in next frame
-        # self.v_pred = [0,0]             # predicted velocity in next frame
-        # self.v = [0,0]                  # current velocity
         self.pyramid = pyramid
         self.score = 0
         self.smooth_traj = True

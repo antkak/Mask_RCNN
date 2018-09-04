@@ -17,10 +17,11 @@ def gkern(kernlen=21, nsig=3):
     return kernel
 
 
-def gating(x_1, P_1, x_2, s = 3):
+def gating(x_1, P_1, x_2, b_gain,s = 3):
     lambda_, v = np.linalg.eig(P_1[:2,:2])
     lambda_ = np.sqrt(lambda_)
-    ll_p   = (s*lambda_[0])**2*np.linalg.multi_dot([v[0].T, np.linalg.inv(P_1[:2,:2]), v[0]])
+    # correct the following for rectangular
+    ll_p   = (s*lambda_[0]+b_gain)**2*np.linalg.multi_dot([v[0].T, np.linalg.inv(P_1[:2,:2]), v[0]])
     ll_x_2 = mahalanobis(x_2[:2],x_1[:2],np.linalg.inv(P_1[:2,:2]))**2
     print(ll_p)
     print(ll_x_2)
@@ -28,6 +29,23 @@ def gating(x_1, P_1, x_2, s = 3):
         return True
     else:
         return False
+
+def gating_mask(x_1, P_1, imshape, s = 3):
+    
+    lambda_, v = np.linalg.eig(P_1[:2,:2])
+    lambda_ = np.sqrt(lambda_)
+    ll_p   = (s*lambda_[0])**2*np.linalg.multi_dot([v[0].T, np.linalg.inv(P_1[:2,:2]), v[0]])
+
+    print(imshape)
+    ecl_mask = np.zeros(tuple(imshape))
+    for i in range(imshape[0]):
+    	for j in range(imshape[1]):
+    		x = np.array([i,j])
+    		if mahalanobis(x,x_1[:2],np.linalg.inv(P_1[:2,:2]))**2 <= ll_p:
+    			ecl_mask[i,j] = 1
+    return ecl_mask
+
+
 
 def squarify(M,val):
 	'''

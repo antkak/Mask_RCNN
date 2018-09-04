@@ -16,7 +16,7 @@ ROOT_DIR = os.path.abspath("./")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from trcnn.utils import squarify, box_dist, bbs, sample_boxes, best_buddies_assignment, gating, gkern, gating_mask
+from trcnn.utils import squarify, box_dist, bbs, sample_boxes, best_buddies_assignment, gating, gkern, gating_mask, keepClasses
 						
 import trcnn.model as tracker
 from trcnn.model import trackedObject as tob
@@ -35,7 +35,9 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 	kept in input dir folder
 	'''
 
-	pickles = sorted([f for f in listdir(pickle_dir) if isfile(join(pickle_dir, f))])
+	# pickles = sorted([f for f in listdir(pickle_dir) if isfile(join(pickle_dir, f))])
+	# Local path to trained weights file
+	COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 
 	# Relevant classes
 	classes_det = ['Car', 'Pedestrian']
@@ -82,6 +84,22 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 	config = EncoderConfig()
 
+
+	# Configuration class
+	class InferenceConfig(coco.CocoConfig):
+		# Set batch size to 1 since we'll be running inference on
+		# one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
+		GPU_COUNT = 1
+		IMAGES_PER_GPU = 1
+
+	config = InferenceConfig()
+
+	# Create model object in inference mode.
+	detect_model = tracker.TrackRCNN(mode="inference", model_dir=MODEL_DIR, config=config)
+
+	# Load weights trained on MS-COCO
+	detect_model.load_weights(COCO_MODEL_PATH, by_name=True)
+
 	# Read frame names from folder
 	IMAGE_DIR = input_dir
 	frames = sorted([f for f in listdir(IMAGE_DIR) if isfile(join(IMAGE_DIR, f))])
@@ -97,8 +115,15 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 	## unpickle first dictionary 
 	## == run the detector (+4 seconds GPU)
-	f = open(join(pickle_dir, pickles[0]),'rb')
-	r = pickle.load(f)
+	# f = open(join(pickle_dir, pickles[0]),'rb')
+	# r = pickle.load(f)
+
+	# run detection
+	results = detect_model.detect([image], np.zeros((2,4)), verbose=0)
+
+	r = results[0]
+	r = keepClasses(r, classes_det, class_names)
+
 		
 	# Compute particle bounding boxes and pyramid levels
 	pyr_levels, bboxes_batch, split_list, image = sample_boxes(r, image=image)
@@ -200,8 +225,12 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 		
 		# Detections and encoding
 		
-		f = open(join(pickle_dir, pickles[jj]),'rb')
-		r = pickle.load(f)
+		# f = open(join(pickle_dir, pickles[jj]),'rb')
+		# r = pickle.load(f)
+		results = detect_model.detect([image], np.zeros((2,4)), verbose=0)
+		r = results[0]
+		r = keepClasses(r, classes_det, class_names)
+
 
 		# Compute particle bounding boxes and pyramid levels
 		pyr_levels, bboxes_batch, split_list, image = sample_boxes(r, image=image)
@@ -353,9 +382,9 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 			masks[:,:,i] = obj_list_fr[i].mask
 
 		# save current frame with found objects
-		# save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
-		# 				class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
-		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
+		save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
+						class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
+						file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
 		# save_instances(image, boxes, masks, [-1 for x in obj_list_fr], 
 		# 				class_names, ids = [str(x.id)[:4] for x in obj_list_fr], 
 		# 				file_name = str(jj)+'.png',colors=[x.color for x in obj_list_fr])
@@ -407,8 +436,9 @@ def demo_mot(input_dir, pickle_dir ,use_extra_boxes=False):
 
 
 if __name__ == '__main__':
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0017'
-	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017s'
+	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0001'
+	# pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017s'
+	pickle_dir = ''
 	# input_dir =  '/home/anthony/mbappe'
 	# pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/mbappe'
 	# input_dir = '/home/anthony/nascar/frames'
@@ -418,9 +448,9 @@ if __name__ == '__main__':
 	y = [x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)]
 	print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
 
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
-	pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0014s'
+	# input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
+	# pickle_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0014s'
 
-	st_mot = datetime.now()
-	y = [x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)]
-	print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
+	# st_mot = datetime.now()
+	# y = [x.encoding for x in demo_mot(input_dir, pickle_dir ,use_extra_boxes = False)]
+	# print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
