@@ -1,5 +1,4 @@
 import numpy as np
-from numba import jit
 import cv2
 import skimage
 from scipy.spatial.distance import mahalanobis
