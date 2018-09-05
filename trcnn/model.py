@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import uuid
 import numpy as np
+np.random.seed(1)
 
 # Import measurement for tracking 
 from measurements import  save_instances 
@@ -53,7 +54,8 @@ class DART():
         # include configuration parameters for object
         for i in range(len(r['class_ids'])):
             self.obj_list += [trackedObject(self.track_id, r['masks'][:,:,i], r['rois'][i,:],
-                            r['class_ids'][i], feat_sets[i], pyr_levels[i])]
+                              r['class_ids'][i], feat_sets[i], pyr_levels[i],
+                              kalman=[self.config.KF_P, self.config.KF_Q, self.config.KF_R])]
             self.track_id += 1
 
         # Prediction Step   
@@ -113,7 +115,8 @@ class DART():
 
             # initialize tracked Objects for this current frame
             temp_list += [trackedObject(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
-                            r['class_ids'][i], feat_sets[i], pyr_levels[i])]
+                            r['class_ids'][i], feat_sets[i], pyr_levels[i],
+                            kalman=[self.config.KF_P, self.config.KF_Q, self.config.KF_R])]
             temp_scores += [r['scores'][i]]
 
 
@@ -150,7 +153,7 @@ class DART():
         matching_scores = []
         for i in row_ind:
             matching_scores += [peek_matrix[i,col_ind[i]]]
-        self.lgf.write(str(peek_matrix)+'\n'+str(row_ind)+'\n'+str(col_ind)+'\n'+str(matching_scores)+'\n')
+        self.lgf.write(np.array_str(peek_matrix, max_line_width=1000)+'\n'+str(row_ind)+'\n'+str(col_ind)+'\n'+str(matching_scores)+'\n')
 
         num_new = len(temp_list)
         temp_matched = [False]*num_new
@@ -1066,7 +1069,9 @@ def box_center(bbox):
 
 class trackedObject():
 
-    def __init__(self, ID, mask, bbox, class_name, encodings, pyramid, color = None):
+    def __init__(self, ID, mask, bbox, class_name, encodings, pyramid, 
+                kalman = [np.diag([10,10,1000,1000]),np.diag([1,1,10,10]),np.diag([100,100])], 
+                color = None):
 
         self.id = ID 
         self.mask = mask
@@ -1084,9 +1089,9 @@ class trackedObject():
         self.dim_o = 2
         self.F = np.array([[1,0,1,0],[0,1,0,1],[0,0,1,0],[0,0,0,1]])
         self.H = np.array([[1,0,0,0],[0,1,0,0]])
-        self.R = np.diag([100,100])
-        self.P = np.diag([10,10,1000,1000])
-        self.Q = np.diag([1,1,10,10])
+        self.P = kalman[0]
+        self.Q = kalman[1]
+        self.R = kalman[2]
         self.x = np.array([0,0,0,0]).reshape((4,1))
         self.x_minus = np.array([0,0,0,0]).reshape((4,1))
         self.x[:2] = box_center(self.bbox)
@@ -1154,8 +1159,6 @@ class trackedObject():
 
 
     def refress_encoding(self, particles, buddy_list, c_old = 0.8):
-
-        np.random.seed(1)
         
         # encoding consists of two arrays
         # a card(particles)x dim(feature_vec) array of features for each particle

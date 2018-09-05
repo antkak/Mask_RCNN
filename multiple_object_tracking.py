@@ -87,9 +87,9 @@ def demo_mot(input_dir):
 		# save_spatial_constraints
 		SAVE_SPATIAL_CONSTRAINTS = False
 		# kalman filter parameters
-		KF_Q = None
-		KF_P = None
-		KF_R = None
+		KF_Q = np.diag([1,1,10,10])
+		KF_P = np.diag([10,10,1000,1000])
+		KF_R = np.diag([100,100])
 		# Appearance Drift Multiplier
 		APP_DRIFT_MULTIPLIER = 0.8
 		FRAME_THRESHOLD = 5
