@@ -79,13 +79,13 @@ def demo_mot(input_dir):
 			return N
 		# parameters for tracking
 		# save_detection images
-		SAVE_DETECTIONS = False
+		SAVE_DETECTIONS = True
 		# use_boxes
 		USE_BOXES = False
 		# use_spatial_constraints
 		USE_SPATIAL_CONSTRAINTS = True
 		# save_spatial_constraints
-		SAVE_SPATIAL_CONSTRAINTS = False
+		SAVE_SPATIAL_CONSTRAINTS = True
 		# kalman filter parameters
 		KF_Q = np.diag([1,1,10,10])
 		KF_P = np.diag([10,10,1000,1000])

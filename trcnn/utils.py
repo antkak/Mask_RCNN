@@ -6,17 +6,51 @@ from scipy.spatial.distance import mahalanobis
 np.random.seed(1)
 import scipy.stats as st
 
-# [x]
-def gkern(kernlen=21, nsig=3):
-    """Returns a 2D Gaussian kernel array."""
+def normalize_boxes(boxes, imshape):
+    
+    height, width = imshape
+    if height > width:
+        shift = (height - width)/2
+        boxes = boxes + np.array([0, shift, 0, shift])
+        boxes = np.divide(boxes, height-1)
+    else: 
+        shift = (width - height)/2
+        boxes = boxes + np.array([shift ,0 ,shift ,0])
+        boxes = np.divide(boxes, width-1)
+    return boxes
 
-    interval = (2*nsig+1.)/(kernlen)
-    x = np.linspace(-nsig-interval/2., nsig+interval/2., kernlen+1)
-    kern1d = np.diff(st.norm.cdf(x))
-    kernel_raw = np.sqrt(np.outer(kern1d, kern1d))
-    kernel = kernel_raw/kernel_raw.sum()
-    return kernel
+# Intersection over Union for performance evaluation
+def IoU(boxA, boxB):
+    xA = max(boxA[1], boxB[1])
+    yA = max(boxA[0], boxB[0])
+    xB = min(boxA[3], boxB[3])
+    yB = min(boxA[2], boxB[2])
+    # compute the area of intersection rectangle
+    interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
+ 
+    # compute the area of both the prediction and ground-truth
+    # rectangles
+    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
+    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
+ 
+    # compute the intersection over union by taking the intersection
+    # area and dividing it by the sum of prediction + ground-truth
+    # areas - the interesection area
+    iou = interArea / float(boxAArea + boxBArea - interArea)
 
+    return iou
+
+def box_center(bbox):
+  """
+  Takes a bounding box in the form [x1,y1,x2,y2] and returns z in the form
+    [x,y,s,r] where x,y is the centre of the box and s is the scale/area and r is
+    the aspect ratio
+  """
+  h = bbox[2]-bbox[0]
+  w = bbox[3]-bbox[1]
+  y = bbox[0]+h/2.
+  x = bbox[1]+w/2.
+  return np.array([x,y]).reshape((2,1)) 
 
 def gating(x_1, P_1, x_2, b_gain,s = 3):
    
@@ -30,24 +64,6 @@ def gating(x_1, P_1, x_2, b_gain,s = 3):
         return True
     else:
         return False
-
-# [x]
-def gating_mask(x_1, P_1, imshape, s = 3):
-    
-    lambda_, v = np.linalg.eig(P_1[:2,:2])
-    lambda_ = np.sqrt(lambda_)
-    ll_p   = (s*lambda_[0])**2*np.linalg.multi_dot([v[0].T, np.linalg.inv(P_1[:2,:2]), v[0]])
-
-    print(imshape)
-    ecl_mask = np.zeros(tuple(imshape))
-    for i in range(imshape[0]):
-    	for j in range(imshape[1]):
-    		x = np.array([i,j])
-    		if mahalanobis(x,x_1[:2],np.linalg.inv(P_1[:2,:2]))**2 <= ll_p:
-    			ecl_mask[i,j] = 1
-    return ecl_mask
-
-
 
 def squarify(M,val):
 	'''
@@ -86,22 +102,6 @@ def keepClasses(r, classes, class_names):
 		"detections": r['detections'][:,ri,:]
 	}
 
-
-def box_dist(bbox1, bbox2):
-	# use some metric for box distance
-	# center distance, min corner point distance, IoU, IoM etc
-	# here I use min corner point distance (due to occlusions)
-	c1 = [[bbox1[0], bbox1[1]],
-		  [bbox1[0], bbox1[3]],
-		  [bbox1[2], bbox1[1]],
-		  [bbox1[2], bbox1[3]]]
-	c2 = [[bbox2[0], bbox2[1]],
-		  [bbox2[0], bbox2[3]],
-		  [bbox2[2], bbox2[1]],
-		  [bbox2[2], bbox2[3]]]
-	distances = [(a[0]-b[0])**2+(a[1]-b[1])**2 for a,b in zip(c1,c2)]
-	return min(distances)
-
 def tensor2vec(tensor, mode = 'full'):
 	'''
 	reaarange a tensor into a 1D vector
@@ -116,46 +116,24 @@ def tensor2vec(tensor, mode = 'full'):
 	elif mode == 'full':
 		return tensor.flatten('F')
 
+#[x] can be simplified
 def pyr_sizes(level):
 	'''
 	Assign sample bbox width (= height) for current and lower pyramid level
 	'''
 	return int(np.floor(7*np.exp2(level+1))), int(np.floor(7*np.exp2(level)))
 
+#[x] to be examined
 def num_particles(mask):
 	'''
 	Return the number of particles as a function of mask dimensions
 	Here I tried the square root + constant
 	'''
-	N = int(np.sqrt(np.sum(mask)))+10
+	N = 4*(int(np.sqrt(np.sum(mask)))+10)
+	# N = np.sum(mask)
 	# N = np.sum(mask)//4
 	# print('mask points:{} particles: {}'.format( np.sum(mask), N ) )
 	return N//4, N
-
-@jit(parallel=True)
-def batch_cosine_dist(p1,p2):
-	#  https://nyu-cds.github.io/python-numba/05-cuda/
-	'''
-	Compute the pairwise cosine distance of the rows of p1
-	and p2. For non normalized vectors
-	'''
-	l_w = 2
-	p_len  = len(p1[0])
-	p_card = len(p1)
-	dist_matrix = np.zeros((p_card,p_card))
-	for i in range(p_card):
-		for j in range(p_card):
-			dot = 0
-			denom_a = 0
-			denom_b = 0
-			for k in range(p_len):
-				dot += p1[i,k]*p2[j,k]
-				denom_a += p1[i,k]*p1[i,k]
-				denom_b += p2[j,k]*p2[j,k]
-			dist_matrix[i,j] = 1 - dot/(np.sqrt(denom_a)*np.sqrt(denom_b))
-			dist_matrix[i,j] = 1 - dot
-	return dist_matrix
-
 
 def bbs(obj1, obj2, out_buddies=False):
 	'''
@@ -267,7 +245,7 @@ def sample_boxes(r, image=None):
 
 		# feature pyramid particle constants that correspond to object size
 		N1, N2 = num_particles(mask_image)
-		N2 *= 4
+		# N2 *= 4
 
 		# visualize particle constants
 		# cv2.circle(image, ((r['rois'][i,1]+r['rois'][i,3])//2, (r['rois'][i,0]+r['rois'][i,2])//2), M2//2, (0,0,255), 1)
@@ -297,54 +275,3 @@ def sample_boxes(r, image=None):
 
 	return pyr_levels, bboxes2_batch, split_list, image
 
-def best_buddies_assignment(peek_matrix):
-
-	buddies1 = np.zeros((peek_matrix.shape[0]))
-	buddies2 = np.zeros((peek_matrix.shape[1]))
-	for i in range(peek_matrix.shape[0]):
-		buddies1[i] = np.argmin(peek_matrix[i,:])
-	for i in range(peek_matrix.shape[1]):
-		buddies2[i] = np.argmin(peek_matrix[:,i])
-
-	buddy_count = 0
-	row_ind = []
-	col_ind = []
-	rows = list(range(peek_matrix.shape[0]))
-	cols = list(range(peek_matrix.shape[1]))
-	for i in range(peek_matrix.shape[0]):
-		index = buddies1[i]
-		if buddies2[int(index)] == i:
-			buddy_count += 1
-			row_ind += [i]
-			rows.remove(i)
-			col_ind += [int(index)]
-			cols.remove(int(index))
-			# buddy_b += [[list(boxes1[i]),list(boxes2[int(index)])]]	
-
-	print(row_ind)
-	print(col_ind)
-
-
-	if len(rows) > 0:
-
-		# get cost submatrix
-		peek_matrix2 = peek_matrix[np.array(rows)[:,None],cols]
-		print(peek_matrix2)
-		# print(peek_matrix2)
-
-		# solve the lin sum assignment
-		if peek_matrix2.shape[0]==1:
-			row_ind += [rows[0]]
-			col_ind += [cols[np.argmin(peek_matrix2)]]
-		else:
-			row_left, col_left = linear_sum_assignment(peek_matrix2)
-			row_ind += [rows[i] for i in row_left]
-			col_ind += [cols[i] for i in col_left]
-
-	row_ind = np.array(row_ind)
-	col_ind = np.array(col_ind)
-	inds = row_ind.argsort()
-	row_ind = list(row_ind[inds])
-	col_ind = list(col_ind[inds])
-
-	return row_ind, col_ind

@@ -18,7 +18,7 @@ import colorsys
 import random
 import filterpy.kalman as kl
 from scipy.optimize import linear_sum_assignment
-from trcnn.utils import keepClasses, sample_boxes, squarify, bbs, gating
+from trcnn.utils import keepClasses, sample_boxes, squarify, bbs, gating, box_center, IoU, normalize_boxes
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import uuid
@@ -230,31 +230,7 @@ class DART():
         for obj in self.obj_list:
             obj.location_prediction()
 
-
-
-
 # TrackRCNN adds functionality to MaskRCNN for tracking 
-def IoU(boxA, boxB):
-    xA = max(boxA[1], boxB[1])
-    yA = max(boxA[0], boxB[0])
-    xB = min(boxA[3], boxB[3])
-    yB = min(boxA[2], boxB[2])
-    # compute the area of intersection rectangle
-    interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
- 
-    # compute the area of both the prediction and ground-truth
-    # rectangles
-    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
-    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
- 
-    # compute the intersection over union by taking the intersection
-    # area and dividing it by the sum of prediction + ground-truth
-    # areas - the interesection area
-    iou = interArea / float(boxAArea + boxBArea - interArea)
-
-    return iou
-
-
 class TrackRCNN(modellib.MaskRCNN):
 
         # Overriding build function to include feature maps in output
@@ -566,19 +542,6 @@ class TrackRCNN(modellib.MaskRCNN):
         r = keepClasses(r, classes_det, class_names)
         return r
 
-def normalize_boxes(boxes, imshape):
-    
-    height, width = imshape
-    if height > width:
-        shift = (height - width)/2
-        boxes = boxes + np.array([0, shift, 0, shift])
-        boxes = np.divide(boxes, height-1)
-    else: 
-        shift = (width - height)/2
-        boxes = boxes + np.array([shift ,0 ,shift ,0])
-        boxes = np.divide(boxes, width-1)
-    return boxes
-
 class TrackRoisLayer(KE.Layer):
     """Preprocess tracking anchors
 
@@ -716,6 +679,8 @@ class ParticleDescription():
 
         return feat_sets, pyr_levels
 
+# when external bounding boxes are available, use this to compute classification, bounding box and 
+# mask predictions
 class MaskrcnnHeads():
 
     def __init__(self, config):
@@ -767,7 +732,7 @@ class MaskrcnnHeads():
 
         return model
 
-    # [x]
+    
     def masked(self, images, config, rois, feature_maps, imshape):
 
 
@@ -942,11 +907,6 @@ class MaskrcnnHeads():
 
         return boxes, class_ids, scores, full_masks
 
-
-
-
-
-
 class PyramidROIAlign(KE.Layer):
     """Implements ROI Pooling on multiple levels of the feature pyramid.
 
@@ -1052,20 +1012,6 @@ class PyramidROIAlign(KE.Layer):
 
     def compute_output_shape(self, input_shape):
         return input_shape[0][:2] + self.pool_shape + (input_shape[2][-1], )
-
-
-
-def box_center(bbox):
-  """
-  Takes a bounding box in the form [x1,y1,x2,y2] and returns z in the form
-    [x,y,s,r] where x,y is the centre of the box and s is the scale/area and r is
-    the aspect ratio
-  """
-  h = bbox[2]-bbox[0]
-  w = bbox[3]-bbox[1]
-  y = bbox[0]+h/2.
-  x = bbox[1]+w/2.
-  return np.array([x,y]).reshape((2,1)) 
 
 class trackedObject():
 
