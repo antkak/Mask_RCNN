@@ -1,7 +1,11 @@
 import os
 import sys
-from os import listdir
-from os.path import isfile, join
+
+import keras.backend as K
+import keras.layers as KL
+import keras.engine as KE
+import keras.models as KM
+import tensorflow as tf
 
 # Root directory of the project
 ROOT_DIR = os.path.abspath("../")
@@ -13,7 +17,217 @@ from mrcnn.model import *
 import colorsys
 import random
 import filterpy.kalman as kl
-from scipy.spatial.distance import mahalanobis
+from scipy.optimize import linear_sum_assignment
+from trcnn.utils import keepClasses, sample_boxes, squarify, bbs, gating
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
+import uuid
+import numpy as np
+
+# Import measurement for tracking 
+from measurements import  save_instances 
+
+
+
+class DART():
+    '''
+    Deep Appearance Robust Tracker
+    '''
+
+    def __init__(self, config, output_file, class_names, log_file):
+
+        open(output_file, 'w').close()
+        open(log_file, 'w').close()
+        self.trackf = open(output_file, 'a')
+        self.lgf = open(log_file, 'a')
+        self.track_id = 0
+        self.obj_list = []
+        self.lost_obj = []
+        self.config = config
+        self.class_names = class_names
+
+
+    def initialize(self, r, feat_sets, pyr_levels, image, frame=0):
+
+
+        # include configuration parameters for object
+        for i in range(len(r['class_ids'])):
+            self.obj_list += [trackedObject(self.track_id, r['masks'][:,:,i], r['rois'][i,:],
+                            r['class_ids'][i], feat_sets[i], pyr_levels[i])]
+            self.track_id += 1
+
+        # Prediction Step   
+        for obj in self.obj_list:
+            obj.location_prediction()
+
+        if self.config.SAVE_DETECTIONS:
+            # save first frame
+            save_instances(image, r['rois'], r['masks'], r['class_ids'], 
+                                self.class_names, ids = [str(x.id)[:4] for x in self.obj_list], 
+                                file_name = str(frame)+'.png', colors=[x.color for x in self.obj_list])
+
+
+        self.lgf.write("Frame {}\n".format(frame))
+
+        # write first frame track results
+        for obj in self.obj_list:
+            if obj.tracking_state == 'New' or obj.tracking_state == 'Tracked':
+                self.trackf.write("{} {} {} 0 0 -10.0 {} {} {} {} -1000.0 -1000.0 -1000.0 -10.0 -1 -1 -1 {}\n".format(
+                            frame, obj.id, self.class_names[obj.class_name], 
+                            float(obj.bbox[1]), float(obj.bbox[0]), float(obj.bbox[3]), float(obj.bbox[2]), 1))
+
+        return self.obj_list, self.lost_obj, self.track_id
+
+    def associate(self, r, feat_sets, pyr_levels, image, frame):
+
+        print("Frame {}".format(frame)) 
+
+        self.lgf.write("Frame {}\n".format(frame))
+
+        if self.config.USE_SPATIAL_CONSTRAINTS and self.config.SAVE_SPATIAL_CONSTRAINTS:
+            fig = plt.figure() 
+            ax1 = fig.add_subplot(111, aspect='equal')
+            ax1.imshow(image)
+            for obj in self.obj_list:
+                b_gain = np.sqrt((obj.bbox[2]-obj.bbox[0])**2 + (obj.bbox[3]-obj.bbox[1])**2)/np.sqrt(2)/2
+                x = obj.x_minus
+                P = obj.P_minus
+                lambda_, v = np.linalg.eig(P[:2,:2])
+                lambda_ = np.sqrt(lambda_)
+                j = 3
+                ell = Ellipse(xy=(x[0], x[1]),
+                    width=(lambda_[0]*j+b_gain)*2, height=(lambda_[1]*j+b_gain)*2,
+                    angle=np.rad2deg(np.arccos(v[0, 0])), fill=False,lw=3)
+                ell.set_facecolor('none')
+                ax1.add_patch(ell)
+            fig.canvas.flush_events()
+            plt.draw()
+            plt.savefig('_'+str(frame)+'.png')
+            # plt.show()
+            ax1.cla()
+
+        # for each newly found object initialize trackedObject
+        temp_list = []
+        temp_scores = []
+        for i in range(len(r['class_ids'])):
+
+            # initialize tracked Objects for this current frame
+            temp_list += [trackedObject(uuid.uuid4(), r['masks'][:,:,i], r['rois'][i,:],
+                            r['class_ids'][i], feat_sets[i], pyr_levels[i])]
+            temp_scores += [r['scores'][i]]
+
+
+        # Compare old and new objects' appearance 
+        # gating condition
+        buddy_list = []
+        peek_matrix = np.zeros((len(self.obj_list),len(temp_list)))
+        for i,obj in enumerate(self.obj_list):
+            buddy_list_i = []
+            for j,temp in enumerate(temp_list):
+
+                bb_sim, bb_b = bbs(obj,temp)
+                peek_matrix[i,j] = 1-bb_sim
+                buddy_list_i += [bb_b]
+                if self.config.USE_SPATIAL_CONSTRAINTS:
+                    b_gain = np.sqrt((obj.bbox[2]-obj.bbox[0])**2 + (obj.bbox[3]-obj.bbox[1])**2)/np.sqrt(2)/2
+                    if gating(obj.x_minus, obj.P_minus, temp.x, b_gain):
+                        peek_matrix[i,j] = 100
+
+
+            buddy_list += [buddy_list_i]
+
+        # pad cost matrix if more old objects than new objects
+        if peek_matrix.shape[0] > peek_matrix.shape[1]:
+            peek_matrix = squarify(peek_matrix, 100)
+
+        print('\n'+str(peek_matrix))
+
+
+        # run assignment (appearance model)
+        row_ind, col_ind = linear_sum_assignment(peek_matrix)
+
+        # log matches
+        matching_scores = []
+        for i in row_ind:
+            matching_scores += [peek_matrix[i,col_ind[i]]]
+        self.lgf.write(str(peek_matrix)+'\n'+str(row_ind)+'\n'+str(col_ind)+'\n'+str(matching_scores)+'\n')
+
+        num_new = len(temp_list)
+        temp_matched = [False]*num_new
+
+        # update objects
+        # propagate previous objects in new frame
+        # also save pairs of bounding boxes
+        # pairs = []
+        for i,obj in enumerate(self.obj_list):
+            j = col_ind[i]
+            # if there is a match (old>temp)
+            if j < num_new and peek_matrix[i,col_ind[i]] <= self.config.MATCH_THRESHOLD:
+                # refress data
+                obj.refresh_state(True, window=self.config.FRAME_THRESHOLD)
+                obj.mask = temp_list[j].mask
+
+                # pairs += [buddy_list[i][j]]
+
+                obj.refress_encoding(temp_list[j].encoding, buddy_list[i][j], 
+                    c_old = self.config.APP_DRIFT_MULTIPLIER)
+                obj.class_name = temp_list[j].class_name
+                temp_matched[j] = True
+                obj.score = 1 - peek_matrix[i,j]
+                obj.scores += [[frame, 1 - peek_matrix[i,j]]]
+                obj.location_update(obj.x_minus, obj.P_minus, temp_list[j].bbox )
+
+
+            # if there is no match, this object is occluded in this frame (or lost if it 
+            # is occluded for more than N frames)
+            else:
+                obj.refresh_state(False, window=self.config.FRAME_THRESHOLD)
+                obj.location_update(obj.x_minus, obj.P_minus, None )
+
+        # patches += [pairs]
+        # initialize new objects
+        # det_thresh = 0.7
+        for i, temp in enumerate(temp_list):
+            # for new object initialization the detection score should be >= det_thresh
+            if not temp_matched[i]: # and temp_scores[i] >= det_thresh:
+                temp.id = self.track_id
+                temp.score = temp_scores[i]
+                temp.scores += [[frame, temp_scores[i]]]
+                self.track_id += 1
+                self.obj_list += [temp]
+
+        # keep objects appeared in current frame
+        obj_list_fr = [x for x in self.obj_list if x.tracking_state=='Tracked' or x.tracking_state=='New']
+        num_obj = len(obj_list_fr)
+
+        # Prepare object data for saving image
+        boxes = np.empty([num_obj,4])
+        masks = np.empty([image.shape[0], image.shape[1], num_obj])
+        for i in range(num_obj):
+            boxes[i,:] = obj_list_fr[i].bbox
+            masks[:,:,i] = obj_list_fr[i].mask
+
+        # save current frame with found objects
+        if self.config.SAVE_DETECTIONS:
+            save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
+                            self.class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
+                            file_name = str(frame)+'.png',colors=[x.color for x in obj_list_fr])
+
+        for obj in self.obj_list:
+            if obj.tracking_state == 'New' or obj.tracking_state == 'Tracked':
+                self.trackf.write("{} {} {} 0 0 -10.0 {} {} {} {} -1000.0 -1000.0 -1000.0 -10.0 -1 -1 -1 {}\n".format(
+                            frame, obj.id, self.class_names[obj.class_name], 
+                            float(obj.bbox[1]), float(obj.bbox[0]), float(obj.bbox[3]), float(obj.bbox[2]), 1))
+
+        # remove lost objects
+        self.lost_obj += [x for x in self.obj_list if x.tracking_state=='Lost']
+        self.obj_list = [x for x in self.obj_list if x.tracking_state!='Lost']
+
+        # Prediction Step   
+        for obj in self.obj_list:
+            obj.location_prediction()
+
+
 
 
 # TrackRCNN adds functionality to MaskRCNN for tracking 
@@ -246,9 +460,6 @@ class TrackRCNN(modellib.MaskRCNN):
                 config=config)([tracking_anchors])
             rpn_rois = KL.Concatenate(axis = 1)([rpn_rois, track_rois])
 
-            print(rpn_rois)
-
-
             mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
                 fpn_classifier_graph(rpn_rois, mrcnn_feature_maps, input_image_meta,
                                      config.POOL_SIZE, config.NUM_CLASSES,
@@ -282,7 +493,7 @@ class TrackRCNN(modellib.MaskRCNN):
 
     # Overwrite detect function to output feat maps, image metas, molded images and 
     # normalized coordinates of boxes (detections)
-    def detect(self, images, tracking_anchors, verbose=0):
+    def detect(self, images, tracking_anchors, classes_det, class_names, verbose=0):
         """Runs the detection pipeline.
 
         images: List of images, potentially of different sizes.
@@ -347,7 +558,10 @@ class TrackRCNN(modellib.MaskRCNN):
                 "images": molded_images,
                 "detections": detections
             })
-        return results
+
+        r = results[0]
+        r = keepClasses(r, classes_det, class_names)
+        return r
 
 def normalize_boxes(boxes, imshape):
     
@@ -463,6 +677,42 @@ class RoiAppearance():
         pools = self.keras_model.predict([rois, meta, f2, f3, f4, f5])
         return pools
 
+class ParticleDescription():
+
+    def __init__(self, config):
+        self.config = config
+        self.encoder = RoiAppearance(config=self.config)
+    def encode(self, r, image):
+       
+        # Compute particle bounding boxes and pyramid levels
+        pyr_levels, bboxes_batch, split_list, image = sample_boxes(r, image=image)
+       
+        # Keep a copy of absolute coordinates
+        bboxes_abs_batch = bboxes_batch.copy()
+
+        # Normalize coordinates for encoding
+        bboxes_batch = np.array([normalize_boxes(bboxes_batch, image.shape[:2])])
+
+        # Encode particle boxes
+        app = self.encoder.rois_encode(bboxes_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
+                    r['fp_maps'][2],r['fp_maps'][3])
+        app_list = [app[0,i,:,:,:].flatten('F') for i in range(app.shape[1])]
+
+        app = np.array(app_list)
+
+        # append features to feature list
+        # st_i = 1 because bboxes_abs_batch first row is dummy (zero initialization)
+        st_i = 1
+        feat_sets = []
+        for split in split_list:
+
+            feat_sets += [[bboxes_abs_batch[st_i:split+st_i,:], \
+                    app[st_i:split+st_i,:]/np.linalg.norm(app[st_i:split+st_i,:], axis = 1)[:,None],\
+                    np.ones(len(app[st_i:split+st_i,:]))]]
+            st_i += split
+
+        return feat_sets, pyr_levels
+
 class MaskrcnnHeads():
 
     def __init__(self, config):
@@ -485,8 +735,6 @@ class MaskrcnnHeads():
             name='input_P5')
 
         mrcnn_feature_maps = [input_feat_2, input_feat_3, input_feat_4, input_feat_5]
-
-        print(input_rois)
 
         mrcnn_class_logits, mrcnn_class, mrcnn_bbox =\
             fpn_classifier_graph(input_rois, mrcnn_feature_maps, input_image_meta,
@@ -881,7 +1129,7 @@ class trackedObject():
             self.x = self.x_minus
             self.P = self.P_minus
 
-    def refresh_state(self, matched):
+    def refresh_state(self, matched, window=5):
 
         # TODO: include xc, yc, h, w, velocities state
         if self.tracking_state == 'New':
@@ -900,96 +1148,36 @@ class trackedObject():
                 self._occluded_cnt = 0
             else:
                 self._occluded_cnt += 1
-                if self._occluded_cnt > 5: # Frames being occluded
+                if self._occluded_cnt > window: # Frames being occluded
                     self.tracking_state = 'Lost'
 
 
 
-    def refress_encoding(self, particles, buddy_list):
+    def refress_encoding(self, particles, buddy_list, c_old = 0.8):
 
         np.random.seed(1)
-        c_old = 0.8
-        # c_bb = 1
-        # print(buddy_list)
+        
         # encoding consists of two arrays
         # a card(particles)x dim(feature_vec) array of features for each particle
         # a card(particles)x 4 array of bounding boxes for each particle 
         # [feat_array, box_array]
         num_particles = max(len(particles[0]), len(self.encoding[0]))
-        # if num_particles < 60:
-        #     print('Before merging')
-        #     print('obj {}'.format(self.encoding[0]))
-        #     print('temp {}'.format(particles[0]))
+
         N = len(particles[0]) + len(self.encoding[0])
 
-        # p_n = [2/3/len(self.encoding[0])]*len(self.encoding[0])
-        # p_o = [1/3/len(particles[0])]*len(particles[0])
-        # p = p_n + p_o
         self.encoding[2] *= c_old
-        # particles[2][buddy_list] *= c_bb
+        
         probs = np.hstack((particles[2],self.encoding[2]))
         p = probs/np.sum(probs)
-        # print(sum(p))
+
         enc_all = [np.vstack((particles[0],self.encoding[0])), np.vstack((particles[1],self.encoding[1])), probs ] 
         point_val = np.random.choice(np.array(list(range(0,N))), size = num_particles, p=p , replace = False)
 
         new_enc = [enc_all[0][point_val], enc_all[1][point_val], probs[point_val]]
 
         self.encoding = new_enc
-        # if num_particles < 60:
-        #     print('After merging')
-        #     print('obj {}'.format(self.encoding))
 
 
-    # def motion_prediction(self):
 
-    #     self.v_pred = self.vel_predict()
-    #     self.bbox_pred = self.bbox_predict() 
-    #     return self.v_pred, self.bbox_pred
 
-    # def update_motion(self, bbox_obs):
-
-    #     assert(self.tracking_state != 'New')
-
-    #     if self.tracking_state == 'Tracked':
-    #         assert(bbox_obs is not None)
-    #         self.v = self.compute_vel(bbox_obs)
-    #         self.bbox = bbox_obs 
-    #         if IoU(self.bbox, self.bbox_pred) > 0.5:
-    #             self.smooth_traj = True 
-    #         else:
-    #             self.smooth_traj = False
-    #     elif self.tracking_state == 'Occluded':
-    #         assert(bbox_obs is None)
-    #         self.v = self.v_pred
-    #         if IoU(self.bbox, self.bbox_pred) > 0.5:
-    #             self.smooth_traj = True 
-    #         else:
-    #             self.smooth_traj = False
-    #         self.bbox = self.bbox_pred
-    #     else:
-    #         # Lost, Do nothing really
-    #         None
-
-    # def vel_predict(self,mode='const'):
-    #     # classic constant velocity model
-    #     if mode == 'const':
-    #         return self.v
-    #     # elif mode == 'rnn':
-    #     #     return self.rnn_model.predict(self.v)
-    #     else:
-    #         assert(self,mode=='const')
-
-    # def bbox_predict(self):
-    #     # y x y x
-    #     # x y 
-    #     return [self.v_pred[1] + self.bbox[0],
-    #             self.v_pred[0] + self.bbox[1],
-    #             self.v_pred[1] + self.bbox[2],
-    #             self.v_pred[0] + self.bbox[3]]
-
-    # def compute_vel(self,bbox_obs, mode = 'upper'):
-    #     # TODO: implement Nearest corner
-    #     return [bbox_obs[1] - self.bbox[1],
-    #             bbox_obs[0] - self.bbox[0]]    
 

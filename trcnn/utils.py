@@ -6,6 +6,7 @@ from scipy.spatial.distance import mahalanobis
 np.random.seed(1)
 import scipy.stats as st
 
+# [x]
 def gkern(kernlen=21, nsig=3):
     """Returns a 2D Gaussian kernel array."""
 
@@ -18,18 +19,19 @@ def gkern(kernlen=21, nsig=3):
 
 
 def gating(x_1, P_1, x_2, b_gain,s = 3):
+   
     lambda_, v = np.linalg.eig(P_1[:2,:2])
     lambda_ = np.sqrt(lambda_)
-    # correct the following for rectangular
+
     ll_p   = (s*lambda_[0]+b_gain)**2*np.linalg.multi_dot([v[0].T, np.linalg.inv(P_1[:2,:2]), v[0]])
     ll_x_2 = mahalanobis(x_2[:2],x_1[:2],np.linalg.inv(P_1[:2,:2]))**2
-    print(ll_p)
-    print(ll_x_2)
+
     if ll_x_2 >= ll_p:
         return True
     else:
         return False
 
+# [x]
 def gating_mask(x_1, P_1, imshape, s = 3):
     
     lambda_, v = np.linalg.eig(P_1[:2,:2])
@@ -155,7 +157,7 @@ def batch_cosine_dist(p1,p2):
 	return dist_matrix
 
 
-def bbs(obj1, obj2):
+def bbs(obj1, obj2, out_buddies=False):
 	'''
 	A growing in efficiency implementation of best buddies similarity metric
 	returns: bbs metric
@@ -184,14 +186,10 @@ def bbs(obj1, obj2):
 		particles2 = particles2[indices]
 		boxes2 = boxes2[indices]
 	
-	# for non normalized vectors
-	# buddy = batch_cosine_dist(particles1, particles2)
 	# for normalized vectors (super fast)
 	buddy = 1 - np.dot(particles1, particles2.T)
 
 	# count buddies
-	# I found a marginally faster way 
-	# and a CUDA one
 	# A buddy is defined as an entry in a 2D matrix that is larger than all the other entries
 	# in each row and column 
 	buddies1 = np.zeros((len(particles1)))
@@ -201,13 +199,21 @@ def bbs(obj1, obj2):
 	for i in range(len(particles2)):
 		buddies2[i] = np.argmin(buddy[:,i])
 
-	buddy_count = 0
+	# count best buddies, if out_buddies return buddy coordinates 
 	buddy_b = []
-	for i in range(len(particles1)):
-		index = buddies1[i]
-		if buddies2[int(index)] == i:
-			buddy_count += 1
-			buddy_b += [[list(boxes1[i]),list(boxes2[int(index)])]]
+	if out_buddies:
+		buddy_count = 0
+		for i in range(len(particles1)):
+			index = buddies1[i]
+			if buddies2[int(index)] == i:
+				buddy_count += 1
+				buddy_b += [[list(boxes1[i]),list(boxes2[int(index)])]]
+	else:
+		buddy_count = 0
+		for i in range(len(particles1)):
+			index = buddies1[i]
+			if buddies2[int(index)] == i:
+				buddy_count += 1
 
 	return buddy_count/min(len(particles1),len(particles2)), buddy_b
 
