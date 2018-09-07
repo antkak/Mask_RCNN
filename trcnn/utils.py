@@ -1,5 +1,5 @@
 import numpy as np
-import cv2
+# import cv2
 import skimage
 from scipy.spatial.distance import mahalanobis
 np.random.seed(1)
@@ -238,7 +238,8 @@ def sample_boxes(r, image=None):
 		kernel = skimage.morphology.diamond(M2//2)
 
 		if pyramid_level > pyramid_erosion:
-			mask_image = cv2.erode((r['masks'][:,:,i]).astype(np.uint8), kernel, iterations=1).astype(bool)
+			mask_image = skimage.morphology.binary_erosion((r['masks'][:,:,i]).astype(np.uint8), kernel)
+			# mask_image = cv2.erode((r['masks'][:,:,i]).astype(np.uint8), kernel, iterations=1).astype(bool)
 		else:
 			mask_image = r['masks'][:,:,i]
 
@@ -261,16 +262,16 @@ def sample_boxes(r, image=None):
 		split_list += [N2]
 
 	#visualize bounding boxes
-	if image is not None:
-		for i in range(bboxes2_batch.shape[0]):
-			cv2.circle(image, ((bboxes2_batch[i,1]+bboxes2_batch[i,3])//2, (bboxes2_batch[i,0]+bboxes2_batch[i,2])//2), 1, (0,0,255), 1)
-		for i in list(np.random.choice(range(bboxes2_batch.shape[0]), 15)):
-			cv2.rectangle(image,tuple([bboxes2_batch[i][1], bboxes2_batch[i][0]]),tuple([bboxes2_batch[i][3], bboxes2_batch[i][2]]),(0,255,0),1)
+	# if image is not None:
+	# 	for i in range(bboxes2_batch.shape[0]):
+	# 		cv2.circle(image, ((bboxes2_batch[i,1]+bboxes2_batch[i,3])//2, (bboxes2_batch[i,0]+bboxes2_batch[i,2])//2), 1, (0,0,255), 1)
+	# 	for i in list(np.random.choice(range(bboxes2_batch.shape[0]), 15)):
+	# 		cv2.rectangle(image,tuple([bboxes2_batch[i][1], bboxes2_batch[i][0]]),tuple([bboxes2_batch[i][3], bboxes2_batch[i][2]]),(0,255,0),1)
 
-	# 	cv2.imshow('im', image)
-	# 	cv2.waitKey(0)
-	else:
-		image = None
+	# # 	cv2.imshow('im', image)
+	# # 	cv2.waitKey(0)
+	# else:
+	# 	image = None
 
 	return pyr_levels, bboxes2_batch, split_list, image
 

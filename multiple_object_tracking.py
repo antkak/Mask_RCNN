@@ -19,6 +19,7 @@ def demo_mot(input_dir):
 	This function solves the MOT problem for the KITTI video sequence
 	kept in input dir folder
 	'''
+	os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 	# Local path to trained weights file
 	COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
@@ -189,7 +190,8 @@ def demo_mot(input_dir):
 
 
 if __name__ == '__main__':
-	input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
+	# input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
+	input_dir = '/home/anthony/test/MOT17-08-DPM/img1'
 	# input_dir =  '/home/anthony/mbappe'
 	# input_dir = '/home/anthony/nascar/frames'
 	from datetime import datetime 
