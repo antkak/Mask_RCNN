@@ -29,7 +29,6 @@ np.random.seed(1)
 from measurements import  save_instances 
 
 
-
 class DART():
     '''
     Deep Appearance Robust Tracker
@@ -128,13 +127,28 @@ class DART():
             buddy_list_i = []
             for j,temp in enumerate(temp_list):
 
-                bb_sim, bb_b = bbs(obj,temp)
-                peek_matrix[i,j] = 1-bb_sim
-                buddy_list_i += [bb_b]
+                # bb_sim, bb_b = bbs(obj,temp)
+                # peek_matrix[i,j] = 1-bb_sim
+                # buddy_list_i += [bb_b]
+                # if self.config.USE_SPATIAL_CONSTRAINTS:
+                #     b_gain = np.sqrt((obj.bbox[2]-obj.bbox[0])**2 + (obj.bbox[3]-obj.bbox[1])**2)/np.sqrt(2)/2
+                #     if gating(obj.x_minus, obj.P_minus, temp.x, b_gain):
+                #         peek_matrix[i,j] = 100
+
                 if self.config.USE_SPATIAL_CONSTRAINTS:
+
                     b_gain = np.sqrt((obj.bbox[2]-obj.bbox[0])**2 + (obj.bbox[3]-obj.bbox[1])**2)/np.sqrt(2)/2
                     if gating(obj.x_minus, obj.P_minus, temp.x, b_gain):
                         peek_matrix[i,j] = 100
+                        buddy_list_i += [None]
+                    else:
+                        bb_sim, bb_b = bbs(obj,temp)
+                        peek_matrix[i,j] = 1-bb_sim
+                        buddy_list_i += [bb_b]
+                else:
+                    bb_sim, bb_b = bbs(obj,temp)
+                    peek_matrix[i,j] = 1-bb_sim
+                    buddy_list_i += [bb_b]
 
 
             buddy_list += [buddy_list_i]
