@@ -13,13 +13,17 @@ import trcnn.model as tracker
 # Import COCO config
 sys.path.append(os.path.join(ROOT_DIR, "samples/coco/"))  # To find local version
 import coco
+import pickle
 
-def demo_mot(input_dir, track_config, instance_id):
+def demo_mot(input_dir, pickle_dir, track_config, instance_id):
 	'''
 	This function solves the MOT problem for the KITTI video sequence
 	kept in input dir folder
 	'''
 	os.environ["CUDA_VISIBLE_DEVICES"]="1"
+
+	pickles = sorted([f for f in listdir(pickle_dir) if isfile(join(pickle_dir, f))])
+
 
 	# Local path to trained weights file
 	COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
@@ -27,9 +31,9 @@ def demo_mot(input_dir, track_config, instance_id):
 	MODEL_DIR = os.path.join(ROOT_DIR, "logs")
 
 	# Output tracking file name
-	trackf = input_dir[-4:] + str(instance_id) +'.txt'
+	trackf = str(instance_id) +input_dir[-4:]  +'.txt'
 	# Log some info
-	logf = input_dir[-4:] + 'log' + str(instance_id)+ '.txt'
+	logf = str(instance_id)+ input_dir[-4:] + 'log' + '.txt'
 
 	# COCO Class names
 	# Index of the class in the list is its ID. 
@@ -127,7 +131,9 @@ def demo_mot(input_dir, track_config, instance_id):
 
 		# run detection
 		st_mot = datetime.now()
-		r = detect_model.detect([image], np.zeros((2,4)), classes_det, class_names, verbose=0)
+		# r = detect_model.detect([image], np.zeros((2,4)), classes_det, class_names, verbose=0)
+		f = open(join(pickle_dir, pickles[frame_num]),'rb')
+		r = pickle.load(f)
 		print('Detection time: {}'.format(datetime.now()-st_mot))
 
 		frame_num += 1
@@ -142,15 +148,17 @@ def demo_mot(input_dir, track_config, instance_id):
 	dart.initialize(r, feat_sets, pyr_levels, image, frame=0)
 
 	# for each following frame, run the (classic) MOT algorithm
-	for frame in frames[frame_num:5]:
+	for frame in frames[frame_num:]:
 
 		# read frame
 		image = skimage.io.imread(os.path.join(IMAGE_DIR,frame))
 
 		# run detection
 
-		r = detect_model.detect([image], np.zeros((2,4)), classes_det, class_names, verbose=0)
-
+		# r = detect_model.detect([image], np.zeros((2,4)), classes_det, class_names, verbose=0)
+		f = open(join(pickle_dir, pickles[int(frame[:6])]),'rb')
+		print(int(frame[:6]))
+		r = pickle.load(f)
 		# if no detections, next frame
 		if len(r['class_ids']) == 0:
 			frame_num += 1
@@ -203,12 +211,14 @@ if __name__ == '__main__':
 	# y = [x.encoding for x in demo_mot(input_dir)]
 	# print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
 
+	st_mot = datetime.now()
 	input_dir_set = [ '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/validation/0003',
-					  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/validation/0016',
 					  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/validation/0017']
+	pickles_set = ['/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0003',
+				   '/home/anthony/maskrcnn/Mask_RCNN/samples/pickles/0017']
 	kf_q_set = [np.diag([1,1,10,10]), np.diag([1,1,100,100]), np.diag([10,10,10,10]), np.diag([1,10,10,10]),np.diag([10,1,10,10])]
-	kf_r_set = [np.diag([100,100])] #, np.diag([10,10]),np.diag([1,1]),np.diag([10,100]),np.diag([100,10])]
-	kf_p_set = [np.diag([10,10,1000,1000])]#,np.diag([10,10,100,100]),np.diag([10,1,1000,1000]),np.diag([1,10,1000,1000])]
+	kf_r_set = [np.diag([100,100]), np.diag([10,10]),np.diag([1,1]),np.diag([10,100]),np.diag([100,10])]
+	kf_p_set = [np.diag([10,10,1000,1000]),np.diag([10,10,100,100]),np.diag([10,1,1000,1000]),np.diag([1,10,1000,1000])]
 	tr_id = 0 
 	for kf_q in kf_q_set:
 		for kf_p in kf_p_set:
@@ -238,8 +248,8 @@ if __name__ == '__main__':
 					# SAMPLING_NUM_FUN = all()
 					MATCH_THRESHOLD = 0.9
 				track_config = TrackingConfig()
-				for input_dir in input_dir_set:
-					demo_mot(input_dir, track_config, tr_id)
+				for input_dir,pickle_dir in zip(input_dir_set, pickles_set):
+					demo_mot(input_dir, pickle_dir, track_config, tr_id)
 				tr_id += 1
 
 

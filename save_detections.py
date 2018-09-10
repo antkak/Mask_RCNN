@@ -48,8 +48,8 @@ def keepClasses(r, classes, class_names):
 print("Import: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 st = datetime.now()
 
-# input_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0003'
-input_dir = '/home/anthony/nascar/frames'
+input_dir = '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/validation/0003'
+# input_dir = '/home/anthony/nascar/frames'
 
 # Relevant classes
 classes_det = ['Car', 'Pedestrian' ]
@@ -121,9 +121,8 @@ for frame in frames:
 	st = datetime.now() 
 
 	extra_boxes =  np.zeros((2,4))
-	results = model.detect([image], extra_boxes, verbose=1)
-	r = results[0]
-	r = keepClasses(r, classes_det, class_names)
+	r = model.detect([image], extra_boxes, classes_det, class_names, verbose=1)
+
 
 	print("Detections: {} (hh:mm:ss.ms)".format(datetime.now()-st))
 
