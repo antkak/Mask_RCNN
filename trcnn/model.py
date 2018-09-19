@@ -65,7 +65,7 @@ class DART():
             # save first frame
             save_instances(image, r['rois'], r['masks'], r['class_ids'], 
                                 self.class_names, ids = [str(x.id)[:4] for x in self.obj_list], 
-                                file_name = str(frame)+'.png', colors=[x.color for x in self.obj_list])
+                                file_name = str(frame)+'.png', colors=[x.color for x in self.obj_list], show_bbox=False)
 
 
         self.lgf.write("Frame {}\n".format(frame))
@@ -228,7 +228,7 @@ class DART():
         if self.config.SAVE_DETECTIONS:
             save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
                             self.class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
-                            file_name = str(frame)+'.png',colors=[x.color for x in obj_list_fr])
+                            file_name = str(frame)+'.png',colors=[x.color for x in obj_list_fr],show_bbox=False)
 
         for obj in self.obj_list:
             if obj.tracking_state == 'New' or obj.tracking_state == 'Tracked':

@@ -24,7 +24,6 @@ def demo_mot(input_dir, pickle_dir, track_config, instance_id):
 
 	pickles = sorted([f for f in listdir(pickle_dir) if isfile(join(pickle_dir, f))])
 
-
 	# Local path to trained weights file
 	COCO_MODEL_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 	# Directory to save logs and trained model
@@ -76,31 +75,6 @@ def demo_mot(input_dir, pickle_dir, track_config, instance_id):
 		IMAGES_PER_GPU = 1
 
 	config = InferenceConfig()
-
-	# # Configuration class
-	# class TrackingConfig():
-
-	# 	def all(N):
-	# 		return N
-	# 	# parameters for tracking
-	# 	# save_detection images
-	# 	SAVE_DETECTIONS = False
-	# 	# use_boxes
-	# 	USE_BOXES = False
-	# 	# use_spatial_constraints
-	# 	USE_SPATIAL_CONSTRAINTS = True
-	# 	# save_spatial_constraints
-	# 	SAVE_SPATIAL_CONSTRAINTS = False
-	# 	# kalman filter parameters
-	# 	KF_Q = np.diag([1,1,10,10])
-	# 	KF_P = np.diag([10,10,1000,1000])
-	# 	KF_R = np.diag([100,100])
-	# 	# Appearance Drift Multiplier
-	# 	APP_DRIFT_MULTIPLIER = 0.8
-	# 	FRAME_THRESHOLD = 5
-	# 	# Number of sampling points function
-	# 	# SAMPLING_NUM_FUN = all()
-	# 	MATCH_THRESHOLD = 0.9
 
 	track_config = TrackingConfig()
 
@@ -211,6 +185,10 @@ if __name__ == '__main__':
 	# y = [x.encoding for x in demo_mot(input_dir)]
 	# print('\n\n\n ++++++++++++++++++\nMOT time: {}'.format(datetime.now()-st_mot))
 
+	combo_file = 'combo.txt'
+	open(combo_file, 'w').close()
+	lgf = open(combo_file, 'a')
+
 	st_mot = datetime.now()
 	input_dir_set = [ '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/validation/0003',
 					  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/validation/0017']
@@ -223,6 +201,7 @@ if __name__ == '__main__':
 	for kf_q in kf_q_set:
 		for kf_p in kf_p_set:
 			for kf_r in kf_r_set:
+
 				# Configuration class
 				class TrackingConfig():
 
@@ -234,7 +213,7 @@ if __name__ == '__main__':
 					# use_boxes
 					USE_BOXES = False
 					# use_spatial_constraints
-					USE_SPATIAL_CONSTRAINTS = True
+					USE_SPATIAL_CONSTRAINTS = False
 					# save_spatial_constraints
 					SAVE_SPATIAL_CONSTRAINTS = False
 					# kalman filter parameters
@@ -248,8 +227,12 @@ if __name__ == '__main__':
 					# SAMPLING_NUM_FUN = all()
 					MATCH_THRESHOLD = 0.9
 				track_config = TrackingConfig()
-				for input_dir,pickle_dir in zip(input_dir_set, pickles_set):
-					demo_mot(input_dir, pickle_dir, track_config, tr_id)
+				if tr_id == 0:
+					for input_dir,pickle_dir in zip(input_dir_set, pickles_set):
+						demo_mot(input_dir, pickle_dir, track_config, tr_id)
+					lgf.write("TrackId {} - Parameters q:{}, r:{}, p:{}".format(tr_id, track_config.KF_Q, track_config.KF_R, track_config.KF_P))
+				# lgf.write("TrackId {} - Parameters q:{}, r:{}, p:{}\n".format(tr_id, track_config.KF_Q, track_config.KF_R, track_config.KF_P))
 				tr_id += 1
+
 
 

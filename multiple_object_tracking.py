@@ -3,8 +3,9 @@ import os, sys
 from os.path import isfile, join
 from os import listdir
 import numpy as np
-
+from skimage.transform import rescale
 ROOT_DIR = os.path.abspath("./")
+import cv2
 
 # Import local MOT modules
 sys.path.append(ROOT_DIR)  
@@ -52,7 +53,7 @@ def demo_mot(input_dir):
 	class_names[class_names.index('person')] = 'Pedestrian'
 	class_names[class_names.index('car')]    = 'Car'
 	# Relevant classes
-	classes_det = ['Car', 'Pedestrian']
+	classes_det = ['bird']#, 'Pedestrian']
 
 
 	class EncoderConfig(coco.CocoConfig):
@@ -80,17 +81,17 @@ def demo_mot(input_dir):
 			return N
 		# parameters for tracking
 		# save_detection images
-		SAVE_DETECTIONS = False
+		SAVE_DETECTIONS = True
 		# use_boxes
 		USE_BOXES = False
 		# use_spatial_constraints
 		USE_SPATIAL_CONSTRAINTS = True
 		# save_spatial_constraints
-		SAVE_SPATIAL_CONSTRAINTS = False
+		SAVE_SPATIAL_CONSTRAINTS = True
 		# kalman filter parameters
-		KF_Q = np.diag([1,1,10,10])
-		KF_P = np.diag([10,10,1000,1000])
-		KF_R = np.diag([100,100])
+		KF_Q = np.diag([1,1,100,100])
+		KF_P = np.diag([10,10,100,100])
+		KF_R = np.diag([1,1])
 		# Appearance Drift Multiplier
 		APP_DRIFT_MULTIPLIER = 0.8
 		FRAME_THRESHOLD = 5
@@ -118,10 +119,10 @@ def demo_mot(input_dir):
 
 	# wait until objects are detected
 	while frame_num < len(frames):
-		
+
 		# print log info
 		print("frame {}".format(frame_num))
-		
+
 		# read first image
 		image = skimage.io.imread(os.path.join(IMAGE_DIR,frames[frame_num]))
 
@@ -140,7 +141,7 @@ def demo_mot(input_dir):
 
 	# initialize tracker with first detections
 	dart.initialize(r, feat_sets, pyr_levels, image, frame=0)
-	
+
 	# for each following frame, run the (classic) MOT algorithm
 	for frame in frames[frame_num:]:
 
@@ -148,6 +149,7 @@ def demo_mot(input_dir):
 		image = skimage.io.imread(os.path.join(IMAGE_DIR,frame))
 
 		# run detection
+
 		r = detect_model.detect([image], np.zeros((2,4)), classes_det, class_names, verbose=0)
 
 		# if no detections, next frame
@@ -193,10 +195,12 @@ def demo_mot(input_dir):
 
 
 if __name__ == '__main__':
-	# input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/0014'
-	input_dir = '/home/anthony/test/MOT17-08-DPM/img1'
+	# input_dir =  '/home/anthony/maskrcnn/Mask_RCNN/datasets/training/image_02/validation/0017'
+	# input_dir = '/home/anthony/test/MOT17-08-DPM/img1'
 	# input_dir =  '/home/anthony/mbappe'
 	# input_dir = '/home/anthony/nascar/frames'
+	# input_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/racing'
+	input_dir = '/home/anthony/maskrcnn/Mask_RCNN/samples/pigeons'
 	from datetime import datetime 
 	st_mot = datetime.now()
 	y = [x.encoding for x in demo_mot(input_dir)]
