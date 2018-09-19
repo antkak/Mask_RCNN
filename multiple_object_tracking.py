@@ -168,7 +168,7 @@ def demo_mot(input_dir):
 	dart.initialize(r, feat_sets, pyr_levels, image, frame=0)
 
 	# for each following frame, run the (classic) MOT algorithm
-	for frame in frames[frame_num:1]:
+	for frame in frames[frame_num:]:
 
 		# read frame
 		image = skimage.io.imread(os.path.join(IMAGE_DIR,frame))
