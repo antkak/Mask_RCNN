@@ -24,6 +24,7 @@ from matplotlib.patches import Ellipse
 import uuid
 import numpy as np
 np.random.seed(1)
+from trcnn.utils import best_buddies_assignment
 
 # Import measurement for tracking 
 from measurements import  save_instances 
@@ -161,7 +162,9 @@ class DART():
 
 
         # run assignment (appearance model)
-        row_ind, col_ind = linear_sum_assignment(peek_matrix)
+        # row_ind, col_ind = linear_sum_assignment(peek_matrix)
+        row_ind, col_ind = best_buddies_assignment(peek_matrix)
+
 
         # log matches
         matching_scores = []
@@ -228,7 +231,7 @@ class DART():
         if self.config.SAVE_DETECTIONS:
             save_instances(image, boxes, masks, [x.class_name for x in obj_list_fr], 
                             self.class_names, ids = [str(x.id)[:4]+' '+'{:.2f}'.format(x.score) for x in obj_list_fr], 
-                            file_name = str(frame)+'.png',colors=[x.color for x in obj_list_fr],show_bbox=False)
+                            file_name = str(frame).zfill(6)+'.png',colors=[x.color for x in obj_list_fr],show_bbox=False)
 
         for obj in self.obj_list:
             if obj.tracking_state == 'New' or obj.tracking_state == 'Tracked':
@@ -676,6 +679,8 @@ class ParticleDescription():
         # Encode particle boxes
         app = self.encoder.rois_encode(bboxes_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][1],
                     r['fp_maps'][2],r['fp_maps'][3])
+        # app = self.encoder.rois_encode(bboxes_batch,r['metas'],r['fp_maps'][0],r['fp_maps'][0],
+        #     r['fp_maps'][0],r['fp_maps'][0])
         app_list = [app[0,i,:,:,:].flatten('F') for i in range(app.shape[1])]
 
         app = np.array(app_list)
@@ -967,7 +972,9 @@ class PyramidROIAlign(KE.Layer):
         # e.g. a 224x224 ROI (in pixels) maps to P4
         image_area = tf.cast(image_shape[0] * image_shape[1], tf.float32)
         roi_level = log2_graph(tf.sqrt(h * w) / (224.0 / tf.sqrt(image_area)))
-        roi_level = tf.minimum(3, tf.maximum(
+        # Quick hack to select only from level 2
+        # minimum(5,...) 
+        roi_level = tf.minimum(2, tf.maximum(
             2, 4 + tf.cast(tf.round(roi_level), tf.int32)))
         roi_level = tf.squeeze(roi_level, 2)
 

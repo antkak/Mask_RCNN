@@ -4,6 +4,8 @@ import skimage
 from scipy.spatial.distance import mahalanobis
 np.random.seed(1)
 import scipy.stats as st
+import sklearn.metrics
+from scipy.optimize import linear_sum_assignment
 
 def normalize_boxes(boxes, imshape):
     
@@ -87,6 +89,7 @@ def keepClasses(r, classes, class_names):
 	# Get all indices of relevant classes
 	ri = [ i for i in range(len(r['class_ids'])) if (r['class_ids'][i] in class_indices and \
 			r['rois'][i,:][2]-r['rois'][i,:][0] >= 25 )]
+
 	# ri = [ i for i in range(len(r['class_ids'])) if r['class_ids'][i] in class_indices]
 
 	# Sample results (r) that match relevant indices
@@ -129,6 +132,7 @@ def num_particles(mask):
 	Here I tried the square root + constant
 	'''
 	N = 4*(int(np.sqrt(np.sum(mask)))+10)
+
 	# N = np.sum(mask)
 	# N = np.sum(mask)//4
 	# print('mask points:{} particles: {}'.format( np.sum(mask), N ) )
@@ -163,9 +167,13 @@ def bbs(obj1, obj2, out_buddies=False):
 		particles2 = particles2[indices]
 		boxes2 = boxes2[indices]
 	
+	# print(min(particles1.all()))
 	# for normalized vectors (super fast)
 	buddy = 1 - np.dot(particles1, particles2.T)
-
+	# print(buddy.shape)
+	# buddy = sklearn.metrics.pairwise.additive_chi2_kernel(particles1, particles2)
+	# print(buddy.shape)
+	# print(buddy)
 	# count buddies
 	# A buddy is defined as an entry in a 2D matrix that is larger than all the other entries
 	# in each row and column 
@@ -275,3 +283,45 @@ def sample_boxes(r, image=None):
 
 	return pyr_levels, bboxes2_batch, split_list, image
 
+def best_buddies_assignment(peek_matrix):
+	buddies1 = np.zeros((peek_matrix.shape[0]))
+	buddies2 = np.zeros((peek_matrix.shape[1]))
+	for i in range(peek_matrix.shape[0]):
+		buddies1[i] = np.argmin(peek_matrix[i,:])
+	for i in range(peek_matrix.shape[1]):
+		buddies2[i] = np.argmin(peek_matrix[:,i])
+	buddy_count = 0
+	row_ind = []
+	col_ind = []
+	rows = list(range(peek_matrix.shape[0]))
+	cols = list(range(peek_matrix.shape[1]))
+	for i in range(peek_matrix.shape[0]):
+		index = buddies1[i]
+		if buddies2[int(index)] == i:
+			buddy_count += 1
+			row_ind += [i]
+			rows.remove(i)
+			col_ind += [int(index)]
+			cols.remove(int(index))
+			# buddy_b += [[list(boxes1[i]),list(boxes2[int(index)])]]	
+	print(row_ind)
+	print(col_ind)
+	if len(rows) > 0:
+		# get cost submatrix
+		peek_matrix2 = peek_matrix[np.array(rows)[:,None],cols]
+		print(peek_matrix2)
+		# print(peek_matrix2)
+		# solve the lin sum assignment
+		if peek_matrix2.shape[0]==1:
+			row_ind += [rows[0]]
+			col_ind += [cols[np.argmin(peek_matrix2)]]
+		else:
+			row_left, col_left = linear_sum_assignment(peek_matrix2)
+			row_ind += [rows[i] for i in row_left]
+			col_ind += [cols[i] for i in col_left]
+	row_ind = np.array(row_ind)
+	col_ind = np.array(col_ind)
+	inds = row_ind.argsort()
+	row_ind = list(row_ind[inds])
+	col_ind = list(col_ind[inds])
+	return row_ind, col_ind
